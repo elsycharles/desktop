@@ -35,6 +35,9 @@ export async function packageElectronBuilder(): Promise<Array<string>> {
     prepackaged: distPath,
     targets: Platform.LINUX.createTarget('AppImage', getArchitecture()),
     config: configPath,
+    // Don't let electron-builder publish the AppImage when it detects a CI:
+    // the release workflow publishes all the installers.
+    publish: 'never',
   })
 
   const appImageInstaller = `${distRoot}/GitHubDesktop-linux-*.AppImage`
