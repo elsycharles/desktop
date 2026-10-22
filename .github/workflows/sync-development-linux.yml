@@ -1,0 +1,54 @@
+name: Sync development-linux
+
+# Keeps development-linux up to date with development (upstream GitHub Desktop
+# and Smart Split) and with the Linux patches of shiftkey/desktop.
+#
+# Scheduled workflows only run from the default branch, which is why this file
+# lives on development even though it updates development-linux.
+
+on:
+  workflow_run:
+    workflows: [Sync upstream development]
+    types: [completed]
+  schedule:
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-development-linux
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge development and shiftkey/linux
+    # After the upstream sync, only run when it succeeded
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: write
+      issues: write
+    uses: ./.github/workflows/sync-branch.yml
+    with:
+      target-branch: development-linux
+      sources: |
+        ${{ github.repository }} development
+        shiftkey/desktop linux
+    secrets: inherit
+
+  build:
+    name: Build the updated branch
+    needs: sync
+    if: needs.sync.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      # Pushes made with GITHUB_TOKEN don't trigger other workflows, so start
+      # the Linux CI explicitly to check the synced branch.
+      - name: Start CI / Linux
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run:
+          gh workflow run ci-linux.yml --repo "$GITHUB_REPOSITORY" --ref
+          development-linux

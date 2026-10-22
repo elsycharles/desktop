@@ -46,6 +46,8 @@ declare const __RELEASE_CHANNEL__:
   | 'beta'
   | 'test'
   | 'development'
+  /** Releases of this fork, built without GitHub's credentials */
+  | 'fork'
 
 /** The URL for Squirrel's updates. */
 declare const __UPDATES_URL__: string

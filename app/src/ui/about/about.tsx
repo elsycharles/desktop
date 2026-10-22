@@ -13,7 +13,8 @@ import { IUpdateState, UpdateStatus } from '../lib/update-store'
 import { Loading } from '../lib/loading'
 import { RelativeTime } from '../relative-time'
 import { assertNever } from '../../lib/fatal-error'
-import { ReleaseNotesUri, LinuxReleasesUri } from '../lib/releases'
+import { ForkReleasesUri, ReleaseNotesUri } from '../lib/releases'
+import { enableAutoUpdates } from '../../lib/feature-flag'
 import { encodePathAsUrl } from '../../lib/path'
 import { isOSNoLongerSupportedByElectron } from '../../lib/get-os'
 import { AriaLiveContainer } from '../accessibility/aria-live-container'
@@ -90,7 +91,7 @@ class UpdateInfo extends React.Component<IUpdateInfoProps> {
 export class About extends React.Component<IAboutProps> {
   private get canCheckForUpdates() {
     return (
-      __RELEASE_CHANNEL__ !== 'development' ||
+      (__RELEASE_CHANNEL__ !== 'development' && enableAutoUpdates()) ||
       this.props.allowDevelopment === true
     )
   }
@@ -102,7 +103,7 @@ export class About extends React.Component<IAboutProps> {
 
     if (__LINUX__) {
       const linuxReleaseLink = (
-        <LinkButton uri={LinuxReleasesUri}>View Releases</LinkButton>
+        <LinkButton uri={ForkReleasesUri}>View Releases</LinkButton>
       )
       return (
         <Row>
@@ -158,6 +159,19 @@ export class About extends React.Component<IAboutProps> {
         <p>
           Please visit the GitHub Desktop for Linux release page for
           Linux-specific release notes and to download the latest version.
+        </p>
+      )
+    }
+
+    if (
+      __RELEASE_CHANNEL__ !== 'development' &&
+      !enableAutoUpdates() &&
+      this.props.allowDevelopment !== true
+    ) {
+      return (
+        <p>
+          This build doesn't update automatically. New versions are published on
+          the <LinkButton uri={ForkReleasesUri}>releases page</LinkButton>.
         </p>
       )
     }
