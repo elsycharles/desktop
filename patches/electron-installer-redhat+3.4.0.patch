@@ -2,9 +2,12 @@ diff --git a/node_modules/electron-installer-redhat/resources/spec.ejs b/node_mo
 index e07a8a3..486f59e 100644
 --- a/node_modules/electron-installer-redhat/resources/spec.ejs
 +++ b/node_modules/electron-installer-redhat/resources/spec.ejs
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,8 @@
  %define _binary_payload w<%= compressionLevel %>.xzdio
 +%define _build_id_links none
++# Don't strip the prebuilt binaries: some of them are built for other
++# architectures (like tools bundled by the Copilot SDK) and can't be stripped.
++%global __strip /bin/true
  
  %if "%{_host_cpu}" != "%{_target_cpu}"
  %global __strip /bin/true
