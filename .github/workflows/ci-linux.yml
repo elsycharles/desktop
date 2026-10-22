@@ -1,0 +1,97 @@
+name: 'CI / Linux'
+
+# Builds, tests and packages (AppImage, deb and rpm) the development-linux
+# branch. The file also lives on development so that it can be started from
+# other workflows (workflow_dispatch only works for workflows on the default
+# branch).
+
+on:
+  push:
+    branches:
+      - development-linux
+  pull_request:
+    branches:
+      - development-linux
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: The branch, tag or SHA to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_CHANNEL: fork
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+      - run: yarn
+      - run: yarn lint
+
+  build:
+    name: Ubuntu ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev fakeroot rpm xvfb
+      - name: Read Node.js version
+        id: node
+        run: echo "version=$(sed 's/^v//' .nvmrc)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-ci-environment
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          arch: ${{ matrix.arch }}
+      - name: Build production app
+        run: yarn build:prod
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          TARGET_ARCH: ${{ matrix.arch }}
+      - name: Prepare testing environment
+        run: yarn test:setup
+      - name: Run unit tests
+        run: xvfb-run -a yarn test:unit
+      - name: Package production app
+        run: yarn package
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: Linux-${{ matrix.arch }}
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+          retention-days: 7

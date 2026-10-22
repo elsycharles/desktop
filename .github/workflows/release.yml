@@ -1,0 +1,156 @@
+name: Release
+
+# Builds GitHub Desktop with Smart Split for macOS, Windows and Linux and
+# publishes the installers in a GitHub release named after the tag.
+#
+# macOS and Windows are built from the tag (on development), Linux from the
+# development-linux branch, which contains development plus the Linux patches.
+# The builds use the 'fork' release channel: they aren't signed with GitHub's
+# certificates, use the development OAuth app and never update automatically.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to release (it must already exist)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_CHANNEL: fork
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: ${{ matrix.friendlyName }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            friendlyName: macOS
+            arch: arm64
+            test: true
+          - os: macos-14
+            friendlyName: macOS
+            arch: x64
+          - os: windows-2022
+            friendlyName: Windows
+            arch: x64
+            test: true
+          - os: windows-2022
+            friendlyName: Windows
+            arch: arm64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          submodules: recursive
+      - name: Read Node.js version
+        id: node
+        shell: bash
+        run: echo "version=$(sed 's/^v//' .nvmrc)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-ci-environment
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          arch: ${{ matrix.arch }}
+      - name: Build production app
+        run: yarn build:prod
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          TARGET_ARCH: ${{ matrix.arch }}
+      - name: Run unit tests
+        if: matrix.test
+        run: |
+          yarn test:setup
+          yarn test:unit
+      - name: Package production app
+        run: yarn package
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir release
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "dist/GitHub Desktop-${{ matrix.arch }}.zip" "release/GitHubDesktop-${TAG}-macOS-${{ matrix.arch }}.zip"
+          else
+            cp "dist/GitHubDesktopSetup-${{ matrix.arch }}.exe" "release/GitHubDesktopSetup-${TAG}-${{ matrix.arch }}.exe"
+            cp "dist/GitHubDesktopSetup-${{ matrix.arch }}.msi" "release/GitHubDesktopSetup-${TAG}-${{ matrix.arch }}.msi"
+          fi
+          ls -la release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.friendlyName }}-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux
+    uses: ./.github/workflows/ci-linux.yml
+    with:
+      ref: development-linux
+
+  publish:
+    name: Publish the release
+    needs: [build, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+      - name: Collect installers
+        run: |
+          mkdir release
+          cp artifacts/release-*/* release/
+          for file in artifacts/Linux-*/*; do
+            cp "$file" "release/$(basename "$file")"
+          done
+          (cd release && sha256sum -- * > SHA256SUMS.txt)
+          ls -la release
+      - name: Write release notes
+        run: |
+          git fetch --no-tags origin development-linux
+          version=$(node -p "require('./app/package.json').version")
+          cat > notes.md <<EOF
+          GitHub Desktop ${version} with **Smart Split** (AI-powered commit splitting with Copilot).
+
+          - macOS and Windows are built from \`${TAG}\` ($(git rev-parse --short HEAD))
+          - Linux is built from \`development-linux\` ($(git rev-parse --short FETCH_HEAD))
+
+          ## Installation
+
+          These builds aren't signed with GitHub's certificates and don't update
+          automatically: new versions are published on this releases page.
+
+          - **macOS**: unzip, move *GitHub Desktop* to Applications, then run
+            \`xattr -dr com.apple.quarantine "/Applications/GitHub Desktop.app"\`
+            once (otherwise macOS says the app is damaged).
+          - **Windows**: run the \`.exe\`. SmartScreen warns about an unknown
+            publisher: click *More info* → *Run anyway*.
+          - **Linux**: install the \`.deb\` (Debian/Ubuntu) or \`.rpm\`
+            (Fedora/openSUSE), or run the \`.AppImage\` after \`chmod +x\`.
+
+          The SHA-256 checksums of every file are in \`SHA256SUMS.txt\`.
+          EOF
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" release/* \
+            --title "GitHub Desktop with Smart Split ${TAG}" \
+            --notes-file notes.md \
+            --verify-tag
