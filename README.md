@@ -65,9 +65,15 @@ This fork includes **Smart Split**, a feature that uses GitHub Copilot to automa
 
 1. Stage your files as usual
 2. Click the **Copilot button** (✨) in the commit area and select **Smart Split**
-3. Copilot analyzes your diff and suggests multiple focused commits — each with its own summary, description, and file list
+3. Copilot analyzes your diff and suggests multiple focused commits — each with its own summary, description, and file list. A file whose hunks serve different purposes can be split across several commits (the hunks of each commit are shown next to the file name)
 4. Edit summaries and descriptions inline, reorder commits, toggle individual commits on/off
-5. Click **Commit** to create all selected commits at once
+5. Click **Commit** to create all selected commits at once. Unselected commits stay in the list so you can commit them later
+
+Notes:
+
+- Smart Split works on whole files: if you selected only some lines of a file, all of its changes are analyzed and committed.
+- Smart Split isn't available while amending a commit.
+- File selection is locked while suggestions are shown; dismiss them to change it.
 
 ### Custom commit format
 

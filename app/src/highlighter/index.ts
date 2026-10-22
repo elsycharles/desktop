@@ -75,6 +75,7 @@ const extensionModes: ReadonlyArray<IModeDefinition> = [
     mappings: {
       '.html': 'text/html',
       '.htm': 'text/html',
+      '.astro': 'text/html',
     },
   },
   {
@@ -97,6 +98,7 @@ const extensionModes: ReadonlyArray<IModeDefinition> = [
     install: () => import('codemirror/mode/vue/vue'),
     mappings: {
       '.vue': 'text/x-vue',
+      '.svelte': 'text/x-vue',
     },
   },
   {

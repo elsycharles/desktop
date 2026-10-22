@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
-import { buildSmartSplitSystemPrompt } from '../../src/lib/smart-commit-prompt'
+import {
+  annotateDiffHunks,
+  buildSmartSplitSystemPrompt,
+  buildSmartSplitUserPrompt,
+  MaxSmartSplitDiffLength,
+} from '../../src/lib/smart-commit-prompt'
 
 describe('buildSmartSplitSystemPrompt', () => {
   it('includes conventional commits format by default', () => {
@@ -45,7 +50,7 @@ describe('buildSmartSplitSystemPrompt', () => {
     const prompt = buildSmartSplitSystemPrompt(['a.ts', 'b.ts'])
 
     assert(
-      prompt.includes('MUST appear in exactly one suggestion'),
+      prompt.includes('Every staged file MUST appear at least once'),
       'Prompt should instruct no file omission'
     )
   })
@@ -101,5 +106,69 @@ describe('buildSmartSplitSystemPrompt', () => {
       prompt.includes('conventional commits'),
       'Should fall back to conventional commits for empty template'
     )
+  })
+})
+
+describe('buildSmartSplitSystemPrompt hunks', () => {
+  it('explains the hunk markers and the hunks field', () => {
+    const prompt = buildSmartSplitSystemPrompt(['a.ts'])
+
+    assert(prompt.includes('[hunk 2]'), 'Prompt should explain hunk markers')
+    assert(prompt.includes('"hunks"'), 'Prompt should mention hunks field')
+  })
+
+  it('references the diff tag when provided', () => {
+    const prompt = buildSmartSplitSystemPrompt(['a.ts'], undefined, 'diff-x')
+
+    assert(prompt.includes('<diff-x>'), 'Prompt should reference the diff tag')
+  })
+})
+
+describe('annotateDiffHunks', () => {
+  it('numbers hunks from 1 within each file', () => {
+    const diff = [
+      'diff --git a/a.ts b/a.ts',
+      '@@ -1,1 +1,2 @@',
+      '+a',
+      '@@ -10,1 +11,2 @@',
+      '+b',
+      'diff --git a/b.ts b/b.ts',
+      '@@ -1,1 +1,2 @@',
+      '+@@ not a header',
+    ].join('\n')
+
+    assert.equal(
+      annotateDiffHunks(diff),
+      [
+        'diff --git a/a.ts b/a.ts',
+        '[hunk 1]',
+        '@@ -1,1 +1,2 @@',
+        '+a',
+        '[hunk 2]',
+        '@@ -10,1 +11,2 @@',
+        '+b',
+        'diff --git a/b.ts b/b.ts',
+        '[hunk 1]',
+        '@@ -1,1 +1,2 @@',
+        '+@@ not a header',
+      ].join('\n')
+    )
+  })
+})
+
+describe('buildSmartSplitUserPrompt', () => {
+  it('wraps the diff in the given tag', () => {
+    const prompt = buildSmartSplitUserPrompt('@@ -1 +1 @@', 'diff-x')
+
+    assert(prompt.includes('<diff-x>\n[hunk 1]\n@@ -1 +1 @@\n</diff-x>'))
+  })
+
+  it('truncates very large diffs', () => {
+    const prompt = buildSmartSplitUserPrompt(
+      'x'.repeat(MaxSmartSplitDiffLength * 2)
+    )
+
+    assert(prompt.length < MaxSmartSplitDiffLength + 1000)
+    assert(prompt.includes('[Diff truncated'))
   })
 })

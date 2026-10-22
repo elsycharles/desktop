@@ -9,7 +9,7 @@ import { openFile } from '../lib/open-file'
 import { Resizable } from '../resizable'
 import { FileList } from '../history/file-list'
 import { IMenuItem, showContextualMenu } from '../../lib/menu-item'
-import { pathExists } from '../lib/path-exists'
+import { pathExists } from '../../lib/path-exists'
 import {
   CopyFilePathLabel,
   CopyRelativeFilePathLabel,
@@ -19,7 +19,7 @@ import {
   RevealInFileManagerLabel,
 } from '../lib/context-menu'
 import { revealInFileManager } from '../../lib/app-shell'
-import { clipboard } from 'electron'
+import { writeClipboardText } from '../main-process-proxy'
 import { IConstrainedValue } from '../../lib/app-state'
 import { clamp } from '../../lib/clamp'
 import { getDotComAPIEndpoint } from '../../lib/api'
@@ -201,11 +201,11 @@ export class PullRequestFilesChanged extends React.Component<
       { type: 'separator' },
       {
         label: CopyFilePathLabel,
-        action: () => clipboard.writeText(fullPath),
+        action: () => writeClipboardText(fullPath),
       },
       {
         label: CopyRelativeFilePathLabel,
-        action: () => clipboard.writeText(Path.normalize(file.path)),
+        action: () => writeClipboardText(Path.normalize(file.path)),
       },
       { type: 'separator' },
     ]

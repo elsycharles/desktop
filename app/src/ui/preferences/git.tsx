@@ -76,14 +76,6 @@ export class Git extends React.Component<IGitProps> {
   private renderHooksSettings() {
     return (
       <>
-        <div className="hooks-warning">
-          GitHub Desktop hook support is experimental and currently only
-          supports hooks related to committing. Please{' '}
-          <LinkButton uri="https://github.com/desktop/desktop/issues/new/choose">
-            let us know
-          </LinkButton>{' '}
-          if you encounter any issues or have feedback!
-        </div>
         <Checkbox
           label="Load Git hook environment variables from shell"
           ariaDescribedBy="git-hooks-env-description"
@@ -92,7 +84,7 @@ export class Git extends React.Component<IGitProps> {
           }
           onChange={this.onEnableGitHookEnvChanged}
         />
-        <p className="git-hooks-env-description">
+        <p id="git-hooks-env-description" className="settings-description">
           When enabled, GitHub Desktop will attempt to load environment
           variables from your shell when executing Git hooks. This is useful if
           your Git hooks depend on environment variables set in your shell
@@ -132,7 +124,10 @@ export class Git extends React.Component<IGitProps> {
               }
             />
 
-            <div className="git-hooks-cache-description">
+            <div
+              id="git-hooks-cache-description"
+              className="settings-description"
+            >
               Cache hook environment variables to improve performance. Disable
               if your hooks rely on frequently changing environment variables.
             </div>
@@ -151,9 +146,7 @@ export class Git extends React.Component<IGitProps> {
         >
           <span>Author</span>
           <span>Default branch</span>
-          <span>
-            Hooks <span className="beta-pill">Beta</span>
-          </span>
+          <span>Hooks</span>
         </TabBar>
         <div className="git-preferences-content">{this.renderCurrentTab()}</div>
       </DialogContent>
@@ -203,7 +196,7 @@ export class Git extends React.Component<IGitProps> {
           warningMessageVerb="saved"
         />
 
-        <p id="default-branch-description" className="git-settings-description">
+        <p id="default-branch-description" className="settings-description">
           GitHub's default branch name is <Ref>main</Ref>. You may want to
           change it due to different workflows, or because your integrations
           still require the historical default branch name of <Ref>master</Ref>.
@@ -216,7 +209,7 @@ export class Git extends React.Component<IGitProps> {
 
   private renderEditGlobalGitConfigInfo() {
     return (
-      <p className="git-settings-description">
+      <p className="settings-description">
         These preferences will{' '}
         <LinkButton onClick={this.props.onEditGlobalGitConfig}>
           edit your global Git config file

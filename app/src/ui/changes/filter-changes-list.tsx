@@ -32,15 +32,14 @@ import {
   CopySelectedRelativePathsLabel,
 } from '../lib/context-menu'
 import { CommitMessage } from './commit-message'
-import { SuggestedCommitList } from './suggested-commit-list'
+import { SuggestedCommitList, loadSavedFormat } from './suggested-commit-list'
 import { ICommitSuggestion } from '../../models/commit-suggestion'
 import { ICommitFormatConfig } from '../../lib/smart-commit-prompt'
-import { loadSavedFormat } from './suggested-commit-list'
 import { ChangedFile } from './changed-file'
 import { IAutocompletionProvider } from '../autocompletion'
 import { showContextualMenu } from '../../lib/menu-item'
 import { arrayEquals } from '../../lib/equality'
-import { clipboard } from 'electron'
+import { writeClipboardText } from '../main-process-proxy'
 import { basename } from 'path'
 import { Commit, ICommitContext } from '../../models/commit'
 import {
@@ -78,6 +77,7 @@ import {
 } from './filter-changes-logic'
 import { ChangesListFilterOptions } from './changes-list-filter-options'
 import { HookProgress } from '../../lib/git'
+import { formatNumber } from '../../lib/format-number'
 
 export interface IChangesListItem extends IFilterListItem {
   readonly id: string
@@ -167,9 +167,7 @@ interface IFilterChangesListProps {
   readonly isGeneratingCommitMessage: boolean
   readonly shouldShowGenerateCommitMessageCallOut: boolean
   readonly commitToAmend: Commit | null
-  readonly commitSuggestions: ReadonlyArray<
-    import('../../models/commit-suggestion').ICommitSuggestion
-  > | null
+  readonly commitSuggestions: ReadonlyArray<ICommitSuggestion> | null
   readonly currentBranchProtected: boolean
   readonly currentRepoRulesInfo: RepoRulesInfo
   readonly aheadBehind: IAheadBehind | null
@@ -229,12 +227,6 @@ interface IFilterChangesListProps {
 
   /** Whether or not to show the changes filter */
   readonly showChangesFilter: boolean
-
-  /**
-   * Whether there are any hooks in the repository that could be
-   * skipped during commit with the --no-verify flag
-   */
-  readonly hasCommitHooks: boolean
 
   /**
    * Whether or not to skip blocking commit hooks when creating commits
@@ -374,6 +366,9 @@ export class FilterChangesList extends React.Component<
     }
   )
 
+  private resizeStartY: number | null = null
+  private resizeStartHeight: number | null = null
+
   public constructor(props: IFilterChangesListProps) {
     super(props)
 
@@ -426,10 +421,7 @@ export class FilterChangesList extends React.Component<
 
   // ── Vertical resize handle for Smart Split panel ──
 
-  private resizeStartY: number | null = null
-  private resizeStartHeight: number | null = null
-
-  private handleResizeDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
+  private handleResizeDragStart = (e: React.MouseEvent<HTMLButtonElement>) => {
     this.resizeStartY = e.clientY
     this.resizeStartHeight = this.state.smartSplitHeight
     document.addEventListener('mousemove', this.handleResizeDragMove)
@@ -673,7 +665,7 @@ export class FilterChangesList extends React.Component<
       label: CopyFilePathLabel,
       action: () => {
         const fullPath = Path.join(this.props.repository.path, file.path)
-        clipboard.writeText(fullPath)
+        writeClipboardText(fullPath)
       },
     }
   }
@@ -683,7 +675,7 @@ export class FilterChangesList extends React.Component<
   ): IMenuItem => {
     return {
       label: CopyRelativeFilePathLabel,
-      action: () => clipboard.writeText(Path.normalize(file.path)),
+      action: () => writeClipboardText(Path.normalize(file.path)),
     }
   }
 
@@ -696,7 +688,7 @@ export class FilterChangesList extends React.Component<
         const fullPaths = files.map(file =>
           Path.join(this.props.repository.path, file.path)
         )
-        clipboard.writeText(fullPaths.join(EOL))
+        writeClipboardText(fullPaths.join(EOL))
       },
     }
   }
@@ -708,7 +700,7 @@ export class FilterChangesList extends React.Component<
       label: CopySelectedRelativePathsLabel,
       action: () => {
         const paths = files.map(file => Path.normalize(file.path))
-        clipboard.writeText(paths.join(EOL))
+        writeClipboardText(paths.join(EOL))
       },
     }
   }
@@ -985,8 +977,12 @@ export class FilterChangesList extends React.Component<
 
     return (
       <>
-        <div
+        <button
+          // Prevent form submission with this button
+          type="button"
+          tabIndex={-1}
           className="vertical-resize-handle"
+          aria-label="Resize Smart Split panel"
           onMouseDown={this.handleResizeDragStart}
           onDoubleClick={this.handleResizeDoubleClick}
         />
@@ -1132,20 +1128,18 @@ export class FilterChangesList extends React.Component<
         onPersistCommitMessage={this.onPersistCommitMessage}
         onGenerateCommitMessage={this.onGenerateCommitMessage}
         onSmartSplitCommits={this.onSmartSplitCommits}
+        onCancelGenerateCommitMessage={this.onCancelGenerateCommitMessage}
         onCommitMessageFocusSet={this.onCommitMessageFocusSet}
         onRefreshAuthor={this.onRefreshAuthor}
         onShowPopup={this.onShowPopup}
         onShowFoldout={this.onShowFoldout}
-        onCommitSpellcheckEnabledChanged={
-          this.onCommitSpellcheckEnabledChanged
-        }
+        onCommitSpellcheckEnabledChanged={this.onCommitSpellcheckEnabledChanged}
         onStopAmending={this.onStopAmending}
         onShowCreateForkDialog={this.onShowCreateForkDialog}
         onFilesToCommitNotVisible={this.onFilesToCommitNotVisible}
         accounts={this.props.accounts}
         onSuccessfulCommitCreated={this.onSuccessfulCommitCreated}
         submitButtonAriaDescribedBy={'hidden-changes-warning'}
-        hasCommitHooks={this.props.hasCommitHooks}
         skipCommitHooks={this.props.skipCommitHooks}
         signOffCommits={this.props.signOffCommits}
         allowEmptyCommit={this.props.allowEmptyCommit}
@@ -1179,13 +1173,8 @@ export class FilterChangesList extends React.Component<
     )
   }
 
-  private onCommitAllSuggestions = (
-    suggestions: ReadonlyArray<ICommitSuggestion>
-  ): void => {
-    this.props.dispatcher.executeSmartCommitSuggestions(
-      this.props.repository,
-      suggestions
-    )
+  private onCommitAllSuggestions = (): void => {
+    this.props.dispatcher.executeSmartCommitSuggestions(this.props.repository)
   }
 
   private onRegenerateSmartSplit = (
@@ -1251,6 +1240,10 @@ export class FilterChangesList extends React.Component<
           this.props.repository,
           filesSelected
         )
+  }
+
+  private onCancelGenerateCommitMessage = () => {
+    this.props.dispatcher.cancelGenerateCommitMessage(this.props.repository)
   }
 
   private onShowPopup = (p: Popup) => this.props.dispatcher.showPopup(p)
@@ -1452,9 +1445,9 @@ export class FilterChangesList extends React.Component<
       hasActiveSmartSplit
 
     const checkAllLabel = `${
-      visibleFiles !== files.length ? `${visibleFiles} of ` : ''
+      visibleFiles !== files.length ? `${formatNumber(visibleFiles)} of ` : ''
     }
-    ${files.length} changed file${plural(files.length)}`
+    ${formatNumber(files.length)} changed file${plural(files.length)}`
 
     return (
       <div className="checkbox-container">
@@ -1514,7 +1507,7 @@ export class FilterChangesList extends React.Component<
 
   private getListAriaLabel = () => {
     const { files } = this.props.workingDirectory
-    return `${files.length} changed file${plural(files.length)}`
+    return `${formatNumber(files.length)} changed file${plural(files.length)}`
   }
 
   public render() {
@@ -1605,7 +1598,8 @@ export class FilterChangesList extends React.Component<
         <span className="sr-only">Warning:</span>
         <span>Hidden changes will be committed. </span>
         <LinkButton onClick={this.showFilesToBeCommitted}>
-          Adjust the filters to see all {filesSelected.length} changes
+          Adjust the filters to see all {formatNumber(filesSelected.length)}{' '}
+          changes
         </LinkButton>
       </div>
     )

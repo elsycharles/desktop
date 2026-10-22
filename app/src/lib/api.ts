@@ -23,14 +23,17 @@ import {
 } from './endpoint-capabilities'
 import {
   buildSmartSplitSystemPrompt,
+  buildSmartSplitUserPrompt,
   ICommitFormatConfig,
 } from './smart-commit-prompt'
+import { parseSmartCommitSuggestions } from './smart-commit-suggestions'
+import { SmartCommitSuggestion } from '../models/commit-suggestion'
 import {
   clearCertificateErrorSuppressionFor,
   suppressCertificateErrorFor,
 } from './suppress-certificate-error'
 import { HttpStatusCode } from './http-status-code'
-import { CopilotError } from './copilot-error'
+import { CopilotError, parseCopilotPaymentRequiredError } from './copilot-error'
 import { BypassReasonType } from '../ui/secret-scanning/bypass-push-protection-dialog'
 
 const envEndpoint = process.env['DESKTOP_GITHUB_DOTCOM_API_ENDPOINT']
@@ -58,6 +61,7 @@ type ViewerCopilotResponse = {
       readonly copilotEndpoints: {
         readonly api: string
       }
+      readonly copilotLicenseType: string
       readonly isCopilotDesktopEnabled: boolean
     }
   }
@@ -67,6 +71,7 @@ type ViewerCopilotResponse = {
 type UserCopilotInfo = {
   readonly isCopilotDesktopEnabled: boolean
   readonly copilotEndpoint: string
+  readonly copilotLicenseType: string
 }
 
 /** Response type Copilot chat completions response API */
@@ -672,13 +677,6 @@ export interface IAPIComment {
   readonly created_at: string
 }
 
-/** The server response when handling the OAuth callback (with code) to obtain an access token */
-interface IAPIAccessToken {
-  readonly access_token: string
-  readonly scope: string
-  readonly token_type: string
-}
-
 /** The response we receive from fetching mentionables. */
 interface IAPIMentionablesResponse {
   readonly etag: string | undefined
@@ -827,11 +825,26 @@ export interface IAPICreatePushProtectionBypassResponse {
  * An object for making authenticated requests to the GitHub API
  */
 export class API {
+  private static tokenProvider:
+    | ((endpoint: string, token: string) => Promise<string>)
+    | undefined
   private static readonly tokenInvalidatedListeners =
     new Set<TokenInvalidatedCallback>()
 
+  /** Install the renderer's shared credential authority. Returns a cleanup function. */
+  public static setTokenProvider(
+    provider: (endpoint: string, token: string) => Promise<string>
+  ) {
+    const previous = this.tokenProvider
+    this.tokenProvider = provider
+    return () => {
+      this.tokenProvider = previous
+    }
+  }
+
   public static onTokenInvalidated(callback: TokenInvalidatedCallback) {
     this.tokenInvalidatedListeners.add(callback)
+    return () => this.tokenInvalidatedListeners.delete(callback)
   }
 
   private static emitTokenInvalidated(endpoint: string, token: string) {
@@ -842,7 +855,13 @@ export class API {
 
   /** Create a new API client from the given account. */
   public static fromAccount(account: Account): API {
-    return new API(account.endpoint, account.token, account.copilotEndpoint)
+    // Public-repository fallback must not inherit an unrelated account's sign-in state.
+    return new API(
+      account.endpoint,
+      account.token,
+      account.copilotEndpoint,
+      account.id !== -1
+    )
   }
 
   private endpoint: string
@@ -853,7 +872,13 @@ export class API {
   public constructor(
     endpoint: string,
     token: string,
-    copilotEndpoint?: string
+    copilotEndpoint?: string,
+    /**
+     * Use the account store to resolve/refresh tokens and handle rejected tokens.
+     * Disable for new sign-in tokens and the anonymous public-repository fallback:
+     * those must use the supplied token, not another signed-in account's token.
+     */
+    private readonly manageAccountToken = true
   ) {
     this.endpoint = endpoint
     this.token = token
@@ -1454,7 +1479,7 @@ export class API {
     const response = await this.ghRequest('GET', path, { customHeaders })
     try {
       return await parsedResponse<IAPIWorkflowRuns>(response)
-    } catch (err) {
+    } catch {
       log.debug(
         `Failed fetching workflow runs for ${branchName} (${owner}/${name})`
       )
@@ -1491,7 +1516,7 @@ export class API {
       if (apiWorkflowRuns.workflow_runs.length > 0) {
         return apiWorkflowRuns.workflow_runs[0]
       }
-    } catch (err) {
+    } catch {
       log.debug(
         `Failed fetching workflow runs for ${checkSuiteId} (${owner}/${name})`
       )
@@ -1516,7 +1541,7 @@ export class API {
     })
     try {
       return await parsedResponse<IAPIWorkflowJobs>(response)
-    } catch (err) {
+    } catch {
       log.debug(
         `Failed fetching workflow jobs (${owner}/${name}) workflow run: ${workflowRunId}`
       )
@@ -1619,7 +1644,7 @@ export class API {
 
     try {
       return await parsedResponse<IAPICheckSuite>(response)
-    } catch (_) {
+    } catch {
       log.debug(
         `[fetchCheckSuite] Failed fetch check suite id ${checkSuiteId} (${owner}/${name})`
       )
@@ -1669,10 +1694,16 @@ export class API {
     }
   }
 
+  /**
+   * Fetch the repository's protected branches.
+   *
+   * Returns an empty array when the request succeeds and no protected branches
+   * exist, or null when the protected branch list could not be refreshed.
+   */
   public async fetchProtectedBranches(
     owner: string,
     name: string
-  ): Promise<ReadonlyArray<IAPIBranch>> {
+  ): Promise<ReadonlyArray<IAPIBranch> | null> {
     const path = `repos/${owner}/${name}/branches?protected=true`
     try {
       const response = await this.ghRequest('GET', path)
@@ -1682,7 +1713,7 @@ export class API {
         `[fetchProtectedBranches] unable to list protected branches`,
         err
       )
-      return new Array<IAPIBranch>()
+      return null
     }
   }
 
@@ -1805,14 +1836,20 @@ export class API {
     method: HTTPMethod,
     path: string,
     options: {
-      body?: Object
-      customHeaders?: Object
+      body?: object
+      customHeaders?: object
       reloadCache?: boolean
-    } = {}
+    } = {},
+    resolvedToken?: string
   ): Promise<Response> {
+    const token =
+      resolvedToken ??
+      (API.tokenProvider && this.manageAccountToken
+        ? await API.tokenProvider(this.endpoint, this.token)
+        : this.token)
     return await request(
       endpoint,
-      this.token,
+      token,
       method,
       path,
       options.body,
@@ -1829,12 +1866,22 @@ export class API {
     method: HTTPMethod,
     path: string,
     options: {
-      body?: Object
-      customHeaders?: Object
+      body?: object
+      customHeaders?: object
       reloadCache?: boolean
     } = {}
   ): Promise<Response> {
-    const response = await this.request(this.endpoint, method, path, options)
+    const token =
+      API.tokenProvider && this.manageAccountToken
+        ? await API.tokenProvider(this.endpoint, this.token)
+        : this.token
+    const response = await this.request(
+      this.endpoint,
+      method,
+      path,
+      options,
+      token
+    )
 
     // Only consider invalid token when the status is 401 and the response has
     // the X-GitHub-Request-Id header, meaning it comes from GH(E) and not from
@@ -1842,11 +1889,12 @@ export class API {
     // We're also not considering a token has been invalidated when the reason
     // behind a 401 is the fact that any kind of 2 factor auth is required.
     if (
+      this.manageAccountToken &&
       response.status === HttpStatusCode.Unauthorized &&
       response.headers.has('X-GitHub-Request-Id') &&
       !response.headers.has('X-GitHub-OTP')
     ) {
-      API.emitTokenInvalidated(this.endpoint, this.token)
+      API.emitTokenInvalidated(this.endpoint, token)
     }
 
     tryUpdateEndpointVersionFromResponse(this.endpoint, response)
@@ -1900,10 +1948,10 @@ export class API {
         )
       }
     } else if (response.status === HttpStatusCode.PaymentRequired) {
-      const errorMsg =
-        (await response.text()) || 'You have reached your quota limit.'
-
-      throw new CopilotError(errorMsg, response.status)
+      throw parseCopilotPaymentRequiredError(
+        await response.text(),
+        response.headers.get('Retry-After')
+      )
     } else if (response.status === HttpStatusCode.Unauthorized) {
       throw new CopilotError(
         'Unauthorized: error with authentication.',
@@ -2046,8 +2094,7 @@ export class API {
         )
       } else if (
         body.includes(
-          'unauthorized: not authorized to use this Copilot feature',
-          response.status
+          'unauthorized: not authorized to use this Copilot feature'
         )
       ) {
         throw new CopilotError(
@@ -2244,6 +2291,7 @@ export class API {
           api
         }
 
+        copilotLicenseType
         isCopilotDesktopEnabled
       }
     }
@@ -2252,6 +2300,9 @@ export class API {
     try {
       const response = await this.ghRequest('POST', '/graphql', {
         body: { query: graphql },
+        customHeaders: {
+          'GraphQL-Features': 'copilot_iap_max_sku',
+        },
       })
       if (response === null) {
         return undefined
@@ -2263,6 +2314,7 @@ export class API {
       return {
         copilotEndpoint: viewer.copilotEndpoints.api,
         isCopilotDesktopEnabled: viewer.isCopilotDesktopEnabled,
+        copilotLicenseType: viewer.copilotLicenseType,
       }
     } catch (e) {
       log.warn(`fetchUserCopilotInfo: failed with endpoint ${this.endpoint}`, e)
@@ -2271,44 +2323,25 @@ export class API {
   }
 
   /**
-   * Leverages Copilot to analyze staged file diffs and suggest multiple
+   * Leverages Copilot to analyze file diffs and suggest multiple
    * semantically-grouped commits, each with a title, description, and
-   * list of associated file paths.
+   * list of associated file paths (and hunks, for files split across
+   * several commits).
    *
-   * @param diff Diff of all staged changes, in git format
-   * @param commitFormat The user's preferred commit format template
-   * @param filePaths All staged file paths (used for validation)
+   * @param diff Diff of all the changes to split, in git format
+   * @param filePaths All file paths in the diff (used for validation)
+   * @param formatConfig The user's preferred commit format template
    * @returns Array of commit suggestions generated by Copilot
    */
-  // gpt-4o has a 128 K-token context window. We reserve ~28 K tokens for the
-  // system prompt, leaving ~100 K tokens for the diff.  At ~4 chars per token
-  // that is roughly 400 000 characters. Anything larger is truncated so the
-  // request doesn't fail with a context-window error, mirroring what the
-  // commit-message agent endpoint handles server-side for generateCommitMessage.
-  private static readonly MaxSmartSplitDiffChars = 400_000
-
   public async getDiffSmartCommitSuggestions(
     diff: string,
     filePaths: ReadonlyArray<string>,
     formatConfig?: ICommitFormatConfig
-  ): Promise<
-    ReadonlyArray<{
-      readonly summary: string
-      readonly description: string
-      readonly files: ReadonlyArray<string>
-    }>
-  > {
-    const truncated = diff.length > API.MaxSmartSplitDiffChars
-    const effectiveDiff = truncated
-      ? diff.substring(0, API.MaxSmartSplitDiffChars) +
-        '\n\n[Diff truncated: only the first portion is shown. All staged files are still listed above and must appear in the output.]'
-      : diff
-
-    const instructions = buildSmartSplitSystemPrompt(filePaths, formatConfig)
+  ): Promise<ReadonlyArray<SmartCommitSuggestion>> {
     try {
       const response = await this.copilotChatRequest(
-        instructions,
-        `Analyze the following diff and split it into logical commits:\n\n${effectiveDiff}`
+        buildSmartSplitSystemPrompt(filePaths, formatConfig),
+        buildSmartSplitUserPrompt(diff)
       )
 
       const choice = response.choices.at(0)
@@ -2321,73 +2354,7 @@ export class API {
         throw new Error('No message found in response')
       }
 
-      const parsed = JSON.parse(message)
-
-      // The response should be { suggestions: [...] }
-      if (
-        parsed &&
-        Array.isArray(parsed.suggestions) &&
-        parsed.suggestions.length > 0
-      ) {
-        // Keep Smart Split structure as provided by the model (to preserve
-        // multi-commit grouping), and only sanitize file paths minimally.
-        const normalized = parsed.suggestions.map(
-          (suggestion: {
-            readonly summary?: unknown
-            readonly title?: unknown
-            readonly description?: unknown
-            readonly files?: unknown
-          }) => ({
-            summary:
-              typeof suggestion.summary === 'string'
-                ? suggestion.summary
-                : typeof suggestion.title === 'string'
-                ? suggestion.title
-                : '',
-            description:
-              typeof suggestion.description === 'string'
-                ? suggestion.description
-                : '',
-            files: Array.isArray(suggestion.files)
-              ? suggestion.files.filter(
-                  (f: unknown): f is string =>
-                    typeof f === 'string' && filePaths.includes(f)
-                )
-              : [],
-          })
-        )
-
-        // Validate that all staged files appear in the response.
-        // If any are missing, add them to the last suggestion.
-        const assignedFiles = new Set<string>()
-        for (const s of normalized) {
-          for (const f of s.files) {
-            assignedFiles.add(f)
-          }
-        }
-
-        const missingFiles = filePaths.filter(f => !assignedFiles.has(f))
-
-        if (missingFiles.length > 0 && normalized.length > 0) {
-          const lastSuggestion = normalized[normalized.length - 1]
-          lastSuggestion.files = [...lastSuggestion.files, ...missingFiles]
-        }
-
-        return normalized
-      }
-
-      // Fallback: if the API returns the old single-commit format
-      if (parsed && typeof parsed.title === 'string') {
-        return [
-          {
-            summary: parsed.title,
-            description: parsed.description ?? '',
-            files: [...filePaths],
-          },
-        ]
-      }
-
-      throw new Error('Unexpected response format from Copilot')
+      return parseSmartCommitSuggestions(message, filePaths)
     } catch (e) {
       log.warn(
         `getDiffSmartCommitSuggestions: failed with endpoint ${this.endpoint}`,
@@ -2445,7 +2412,11 @@ export class API {
   }
 }
 
-export async function deleteToken(account: Account) {
+/** Revoke a token, optionally allowing the caller to cancel the request. */
+export async function deleteToken(
+  account: Pick<Account, 'endpoint' | 'token'>,
+  signal?: AbortSignal
+) {
   try {
     const creds = Buffer.from(`${ClientID}:${ClientSecret}`).toString('base64')
     const response = await request(
@@ -2454,7 +2425,9 @@ export async function deleteToken(account: Account) {
       'DELETE',
       `applications/${ClientID}/token`,
       { access_token: account.token },
-      { Authorization: `Basic ${creds}` }
+      { Authorization: `Basic ${creds}` },
+      false,
+      signal
     )
 
     return response.status === 204
@@ -2467,9 +2440,10 @@ export async function deleteToken(account: Account) {
 /** Fetch the user authenticated by the token. */
 export async function fetchUser(
   endpoint: string,
-  token: string
+  token: string,
+  isNewAuthorization = false
 ): Promise<Account> {
-  const api = new API(endpoint, token)
+  const api = new API(endpoint, token, undefined, !isNewAuthorization)
   try {
     const [user, emails, copilotInfo, features] = await Promise.all([
       api.fetchAccount(),
@@ -2489,7 +2463,8 @@ export async function fetchUser(
       user.plan?.name,
       copilotInfo?.copilotEndpoint,
       copilotInfo?.isCopilotDesktopEnabled,
-      features
+      features,
+      copilotInfo?.copilotLicenseType
     )
   } catch (e) {
     log.warn(`fetchUser: failed with endpoint ${endpoint}`, e)
@@ -2516,7 +2491,8 @@ export function getEndpointForRepository(url: string): string {
  * Get the URL for the HTML site. For example:
  *
  * https://api.github.com -> https://github.com
- * http://github.mycompany.com/api -> http://github.mycompany.com/
+ * http://github.mycompany.com/api -> http://github.mycompany.com
+ * https://github.mycompany.com:8443/api/v3 -> https://github.mycompany.com:8443
  */
 export function getHTMLURL(endpoint: string): string {
   if (envHTMLURL !== undefined) {
@@ -2535,7 +2511,7 @@ export function getHTMLURL(endpoint: string): string {
     return 'https://github.com'
   } else {
     if (isGHE(endpoint)) {
-      const url = new window.URL(endpoint)
+      const url = new URL.URL(endpoint)
 
       url.pathname = '/'
 
@@ -2546,8 +2522,9 @@ export function getHTMLURL(endpoint: string): string {
       return url.toString()
     }
 
-    const parsed = URL.parse(endpoint)
-    return `${parsed.protocol}//${parsed.hostname}`
+    // Use the origin rather than the hostname so that GitHub Enterprise
+    // Server instances running on a non-default port retain their port.
+    return new URL.URL(endpoint).origin
   }
 }
 
@@ -2589,42 +2566,21 @@ export function getAccountForEndpoint(
 
 export function getOAuthAuthorizationURL(
   endpoint: string,
-  state: string
+  state: string,
+  shortLived: boolean
 ): string {
   const urlBase = getHTMLURL(endpoint)
-  const scope = encodeURIComponent(oauthScopes.join(' '))
+  const scope = encodeURIComponent(
+    (shortLived && !isGHES(endpoint)
+      ? [...oauthScopes, 'offline_access']
+      : oauthScopes
+    ).join(' ')
+  )
 
   return new window.URL(
     `/login/oauth/authorize?client_id=${ClientID}&scope=${scope}&state=${state}`,
     urlBase
   ).toString()
-}
-
-export async function requestOAuthToken(
-  endpoint: string,
-  code: string
-): Promise<string | null> {
-  try {
-    const urlBase = getHTMLURL(endpoint)
-    const response = await request(
-      urlBase,
-      null,
-      'POST',
-      'login/oauth/access_token',
-      {
-        client_id: ClientID,
-        client_secret: ClientSecret,
-        code: code,
-      }
-    )
-    tryUpdateEndpointVersionFromResponse(endpoint, response)
-
-    const result = await parsedResponse<IAPIAccessToken>(response)
-    return result.access_token
-  } catch (e) {
-    log.warn(`requestOAuthToken: failed with endpoint ${endpoint}`, e)
-    return null
-  }
 }
 
 function tryUpdateEndpointVersionFromResponse(

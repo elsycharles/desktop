@@ -8,6 +8,8 @@ export type MenuEvent =
   | 'add-local-repository'
   | 'create-branch'
   | 'show-branches'
+  | 'show-worktrees'
+  | 'create-worktree'
   | 'remove-repository'
   | 'create-repository'
   | 'rename-branch'
@@ -35,6 +37,7 @@ export type MenuEvent =
   | 'install-windows-cli'
   | 'uninstall-windows-cli'
   | 'open-external-editor'
+  | 'open-in-copilot-app'
   | 'open-with-external-editor'
   | 'select-all'
   | 'show-stashed-changes'
@@ -58,6 +61,7 @@ const TestMenuEvents = [
   'test-arm64-banner',
   'test-confirm-committing-conflicted-files',
   'test-cherry-pick-conflicts-banner',
+  'test-copilot-snapshot-card',
   'test-discarded-changes-will-be-unrecoverable',
   'test-do-you-want-fork-this-repository',
   'test-files-too-large',
@@ -75,9 +79,11 @@ const TestMenuEvents = [
   'test-re-authorization-required',
   'test-release-notes-popup',
   'test-reorder-banner',
+  'test-send-stats',
   'test-showcase-update-banner',
   'test-thank-you-banner',
   'test-thank-you-popup',
+  'test-token-expiration',
   'test-unable-to-locate-git',
   'test-unable-to-open-shell',
   'test-undone-banner',
@@ -87,6 +93,7 @@ const TestMenuEvents = [
   'test-update-existing-git-lfs-filters',
   'test-upstream-already-exists',
   'test-about-dialog',
+  'test-cli-action',
 ] as const
 
 export type TestMenuEvent = typeof TestMenuEvents[number]

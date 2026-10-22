@@ -7,7 +7,7 @@ import {
   RegistryValue,
   RegistryValueType,
 } from 'registry-js'
-import { pathExists } from '../../ui/lib/path-exists'
+import { pathExists } from '../path-exists'
 
 import { IFoundEditor } from './found-editor'
 import memoizeOne from 'memoize-one'
@@ -390,7 +390,11 @@ const editors: WindowsExternalEditor[] = [
   },
   {
     name: 'RStudio',
-    registryKeys: [Wow64LocalMachineUninstallKey('RStudio')],
+    registryKeys: [
+      CurrentUserUninstallKey('RStudio'),
+      LocalMachineUninstallKey('RStudio'),
+      Wow64LocalMachineUninstallKey('RStudio'),
+    ],
     installLocationRegistryKey: 'DisplayIcon',
     displayNamePrefixes: ['RStudio'],
     publishers: ['RStudio', 'Posit Software'],

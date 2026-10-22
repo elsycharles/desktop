@@ -1,10 +1,11 @@
 import { git } from './core'
 import { directoryExists } from '../directory-exists'
-import { resolve } from 'path'
+import { dirname, resolve } from 'path'
+import { realpath } from 'fs/promises'
 
 export type RepositoryType =
   | { kind: 'bare' }
-  | { kind: 'regular'; topLevelWorkingDirectory: string }
+  | { kind: 'regular'; topLevelWorkingDirectory: string; gitDir: string }
   | { kind: 'missing' }
   | { kind: 'unsafe'; path: string }
 
@@ -12,8 +13,9 @@ export type RepositoryType =
  * Attempts to fulfill the work of isGitRepository and isBareRepository while
  * requiring only one Git process to be spawned.
  *
- * Returns 'bare', 'regular', or 'missing' if the repository couldn't be
- * found.
+ * Returns 'bare', 'regular', 'unsafe', or 'missing' if the repository couldn't
+ * be found. An unsafe path is a canonical directory containing the requested
+ * path, verified against Git's ownership diagnostic.
  */
 export async function getRepositoryType(path: string): Promise<RepositoryType> {
   if (!(await directoryExists(path))) {
@@ -22,26 +24,61 @@ export async function getRepositoryType(path: string): Promise<RepositoryType> {
 
   try {
     const result = await git(
-      ['rev-parse', '--is-bare-repository', '--show-cdup'],
+      ['rev-parse', '--is-bare-repository', '--show-cdup', '--git-dir'],
       path,
       'getRepositoryType',
       { successExitCodes: new Set([0, 128]) }
     )
 
     if (result.exitCode === 0) {
-      const [isBare, cdup] = result.stdout.split('\n', 2)
+      // Bare repositories will not include gitdir so we handle that separately
+      if (result.stdout.startsWith('true\n')) {
+        return { kind: 'bare' }
+      }
 
-      return isBare === 'true'
-        ? { kind: 'bare' }
-        : { kind: 'regular', topLevelWorkingDirectory: resolve(path, cdup) }
+      // --is-bare-repository and --show-cdup each produce a single line but
+      // --git-dir could theoretically contain newlines so we parse the known
+      // fields first and treat the remainder as the git dir. We use [\s\S]*
+      // instead of .* for the git dir capture group because .* doesn't match
+      // newlines whereas [\s\S]* matches any character including newlines.
+      const match = result.stdout.match(/^(true|false)\n(.*)\n([\s\S]*)\n$/)
+
+      if (match) {
+        const [, isBare, cdup, gitDir] = match
+
+        return isBare === 'true'
+          ? { kind: 'bare' }
+          : {
+              kind: 'regular',
+              topLevelWorkingDirectory: resolve(path, cdup),
+              gitDir: resolve(path, gitDir),
+            }
+      }
     }
 
-    const unsafeMatch =
-      /fatal: detected dubious ownership in repository at '(.+)'/.exec(
-        result.stderr
-      )
-    if (unsafeMatch) {
-      return { kind: 'unsafe', path: unsafeMatch[1] }
+    // Trace output may precede the diagnostic. Match at line boundaries,
+    // including the first line, without splitting paths containing newlines.
+    const stderr = `\n${result.stderr}`
+    const ownershipDiagnostic =
+      '\nfatal: detected dubious ownership in repository at '
+    if (stderr.includes(ownershipDiagnostic)) {
+      // Derive candidates from the filesystem, not diagnostic text, since
+      // directory names can themselves contain quotes and newlines.
+      let candidate = await realpath(path)
+      for (;;) {
+        const gitPath = __WIN32__ ? candidate.replaceAll('\\', '/') : candidate
+        if (stderr.includes(`${ownershipDiagnostic}'${gitPath}'\n`)) {
+          return { kind: 'unsafe', path: gitPath }
+        }
+
+        const parent = dirname(candidate)
+        if (parent === candidate) {
+          throw new Error(
+            'Unable to determine the repository directory for the ownership exception.'
+          )
+        }
+        candidate = parent
+      }
     }
 
     return { kind: 'missing' }

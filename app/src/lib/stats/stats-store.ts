@@ -42,6 +42,12 @@ import { getRendererGUID } from '../get-renderer-guid'
 import { ValidNotificationPullRequestReviewState } from '../valid-notification-pull-request-review'
 import { useExternalCredentialHelperKey } from '../trampoline/use-external-credential-helper'
 import { getUserAgent } from '../http'
+import { getHooksEnvEnabled } from '../hooks/config'
+import { enableNewStatsEndpoint } from '../feature-flag'
+import { parseModelKey } from '../copilot/byok'
+import { DefaultCopilotModel } from '../stores/copilot-store'
+import { getSystemNotificationsPermission } from '../notifications/notification-permission'
+import { TokenRefreshEvent } from '../credential-sessions'
 
 type PullRequestReviewStatFieldInfix =
   | 'Approved'
@@ -50,16 +56,21 @@ type PullRequestReviewStatFieldInfix =
 
 type PullRequestReviewStatFieldSuffix =
   | 'NotificationCount'
+  | 'NotificationShownCount'
   | 'NotificationClicked'
   | 'DialogSwitchToPullRequestCount'
 
 type PullRequestReviewStatField =
   `pullRequestReview${PullRequestReviewStatFieldInfix}${PullRequestReviewStatFieldSuffix}`
 
-const StatsEndpoint = 'https://central.github.com/api/usage/desktop'
+const LegacyStatsEndpoint = 'https://central.github.com/api/usage/desktop'
+
+const StatsEndpoint =
+  'https://cafe.github.com/twirp/clientappsfe.observability.v1.TelemetryAPI/RecordEvents'
 
 /** The URL to the stats samples page. */
-export const SamplesURL = 'https://desktop.github.com/usage-data/'
+export const SamplesURL =
+  'https://github.com/desktop/desktop/blob/development/docs/process/usage-data.md'
 
 const LastDailyStatsReportKey = 'last-daily-stats-report'
 
@@ -91,6 +102,13 @@ const DefaultDailyMeasures: IDailyMeasures = {
   commits: 0,
   partialCommits: 0,
   openShellCount: 0,
+  openInCopilotAppCount: 0,
+  tokenRefreshAttemptCount: 0,
+  tokenRefreshSuccessCount: 0,
+  tokenRefreshTransientFailureCount: 0,
+  tokenRefreshNonTransientFailureCount: 0,
+  tokenRefreshAbandonedCount: 0,
+  tokenRefreshRequiredSignInCount: 0,
   coAuthoredCommits: 0,
   commitsUndoneWithChanges: 0,
   commitsUndoneWithoutChanges: 0,
@@ -210,6 +228,7 @@ const DefaultDailyMeasures: IDailyMeasures = {
   viewsCheckJobStepOnline: 0,
   rerunsChecks: 0,
   checksFailedNotificationCount: 0,
+  checksFailedNotificationShownCount: 0,
   checksFailedNotificationFromRecentRepoCount: 0,
   checksFailedNotificationFromNonRecentRepoCount: 0,
   checksFailedNotificationClicked: 0,
@@ -219,15 +238,19 @@ const DefaultDailyMeasures: IDailyMeasures = {
   pullRequestReviewNotificationFromRecentRepoCount: 0,
   pullRequestReviewNotificationFromNonRecentRepoCount: 0,
   pullRequestReviewApprovedNotificationCount: 0,
+  pullRequestReviewApprovedNotificationShownCount: 0,
   pullRequestReviewApprovedNotificationClicked: 0,
   pullRequestReviewApprovedDialogSwitchToPullRequestCount: 0,
   pullRequestReviewCommentedNotificationCount: 0,
+  pullRequestReviewCommentedNotificationShownCount: 0,
   pullRequestReviewCommentedNotificationClicked: 0,
   pullRequestReviewCommentedDialogSwitchToPullRequestCount: 0,
   pullRequestReviewChangesRequestedNotificationCount: 0,
+  pullRequestReviewChangesRequestedNotificationShownCount: 0,
   pullRequestReviewChangesRequestedNotificationClicked: 0,
   pullRequestReviewChangesRequestedDialogSwitchToPullRequestCount: 0,
   pullRequestCommentNotificationCount: 0,
+  pullRequestCommentNotificationShownCount: 0,
   pullRequestCommentNotificationClicked: 0,
   pullRequestCommentNotificationFromRecentRepoCount: 0,
   pullRequestCommentNotificationFromNonRecentRepoCount: 0,
@@ -260,6 +283,23 @@ const DefaultDailyMeasures: IDailyMeasures = {
   secretsDetectedOnPushBypassedAsWillFixLaterCount: 0,
   secretsDetectedOnPushDelegatedBypassLinkClickedCount: 0,
   secretRemediationInstructionsLinkClickedCount: 0,
+  worktreeSwitchCount: 0,
+  worktreeCreatedCount: 0,
+  worktreeDeletedCount: 0,
+  worktreeMaxCount: 0,
+  initiateResolveConflictsWithCopilotCount: 0,
+  copilotConflictResolutionAcceptedCount: 0,
+  copilotConflictResolutionWithOverridesCount: 0,
+  copilotConflictResolutionSwitchToManualCount: 0,
+  copilotConflictResolutionStoppedCount: 0,
+  copilotConflictResolutionNoConflictStateCount: 0,
+  copilotConflictResolutionNoConflictedFilesCount: 0,
+  copilotConflictResolutionAllFilesSkippedCount: 0,
+  copilotConflictResolutionErrorCount: 0,
+  copilotConflictResolutionOver15sCount: 0,
+  copilotConflictResolutionOver30sCount: 0,
+  copilotConflictResolutionOver60sCount: 0,
+  copilotConflictResolutionOver120sCount: 0,
 }
 
 // A subtype of IDailyMeasures filtered to contain only its numeric properties
@@ -373,6 +413,9 @@ interface ICalculatedStats {
   /** Is the user logged in with an Enterprise account? */
   readonly enterpriseAccount: boolean
 
+  /** Whether any currently signed-in account uses refreshable OAuth credentials. */
+  readonly usesShortLivedToken: boolean
+
   /**
    * The name of the currently selected theme/application appearance as set at
    * time of stats submission.
@@ -412,6 +455,9 @@ interface ICalculatedStats {
   /** Whether or not the user has enabled high-signal notifications */
   readonly notificationsEnabled: boolean
 
+  /** Whether OS permission allows notifications, or null if unavailable or unknown. */
+  readonly notificationsPermission: boolean | null
+
   /** Whether or not the user has their accessibility setting set for viewing link underlines */
   readonly linkUnderlinesVisible: boolean
 
@@ -428,12 +474,37 @@ interface ICalculatedStats {
    * Whether or not the user has the filtering changes enabled
    **/
   readonly filteringChangesEnabled: boolean
+
+  /** Whether or not the user has the git hooks environment enabled */
+  readonly gitHooksEnvEnabled: boolean
+
+  /** The resolved model ID for Copilot conflict resolution */
+  readonly copilotConflictResolutionModel: string
 }
 
 type DailyStats = ICalculatedStats &
   ILaunchStats &
-  IDailyMeasures &
+  Omit<IDailyMeasures, 'id'> &
   IOnboardingStats
+
+interface IOptInStatusPing {
+  readonly eventType: 'ping'
+  readonly optIn: boolean
+  readonly previousOptInValue: boolean | null
+}
+
+type StatsPayload = DailyStats | IOptInStatusPing
+
+interface ITelemetryEvent {
+  readonly app: 'desktop'
+  readonly event_type: 'usage' | 'ping'
+  readonly dimensions: Readonly<Record<string, string>>
+  readonly measures?: Readonly<Record<string, number>>
+}
+
+interface ITelemetryPayload {
+  readonly events: ReadonlyArray<ITelemetryEvent>
+}
 
 /**
  * Testable interface for StatsStore
@@ -446,8 +517,147 @@ export interface IStatsStore {
   increment: (k: keyof NumericMeasures, n?: number) => Promise<void>
 }
 
-const defaultPostImplementation = (body: Record<string, any>) =>
-  fetch(StatsEndpoint, {
+function stringifyDimensions<
+  T extends { readonly [K in keyof T]: string | boolean | null }
+>(dimensions: T): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    Object.entries(dimensions).map(([key, value]) => [key, String(value)])
+  )
+}
+
+/**
+ * Transform the flat payload accepted by Central into CAFE's TelemetryAPI
+ * event format. CAFE expects `eventType` as `event_type`, dimensions encoded
+ * as strings, and measures encoded as integers inside an `events` array.
+ * Central previously performed the string conversion and integer rounding
+ * server-side, so the CAFE payload must perform those conversions here.
+ *
+ * This conversion stays at the HTTP boundary so the legacy Central path can
+ * continue sending the original payload unchanged.
+ */
+export function buildStatsPayload(body: StatsPayload): ITelemetryPayload {
+  if (body.eventType === 'ping') {
+    return {
+      events: [
+        {
+          app: 'desktop',
+          event_type: body.eventType,
+          dimensions: stringifyDimensions({
+            optIn: body.optIn,
+            previousOptInValue: body.previousOptInValue,
+          }),
+        },
+      ],
+    }
+  }
+
+  const {
+    eventType,
+    version,
+    osVersion,
+    platform,
+    architecture,
+    guid,
+    theme,
+    selectedTerminalEmulator,
+    selectedTextEditor,
+    diffMode,
+    dotComAccount,
+    enterpriseAccount,
+    usesShortLivedToken,
+    notificationsEnabled,
+    notificationsPermission,
+    launchedFromApplicationsFolder,
+    linkUnderlinesVisible,
+    diffCheckMarksVisible,
+    useExternalCredentialHelper,
+    filteringChangesEnabled,
+    gitHooksEnvEnabled,
+    copilotConflictResolutionModel,
+    active,
+    tutorialStarted,
+    tutorialRepoCreated,
+    tutorialEditorInstalled,
+    tutorialBranchCreated,
+    tutorialFileEdited,
+    tutorialCommitCreated,
+    tutorialBranchPushed,
+    tutorialPrCreated,
+    tutorialCompleted,
+    mainReadyTime,
+    loadTime,
+    rendererReadyTime,
+    ...remainingMeasures
+  } = body
+
+  // Central converted dimension values to strings for us.
+  const dimensions = stringifyDimensions({
+    version,
+    osVersion,
+    platform,
+    architecture,
+    guid,
+    theme,
+    selectedTerminalEmulator,
+    selectedTextEditor,
+    diffMode,
+    dotComAccount,
+    enterpriseAccount,
+    usesShortLivedToken,
+    notificationsEnabled,
+    notificationsPermission,
+    launchedFromApplicationsFolder,
+    linkUnderlinesVisible,
+    diffCheckMarksVisible,
+    useExternalCredentialHelper: useExternalCredentialHelper ?? null,
+    filteringChangesEnabled,
+    gitHooksEnvEnabled,
+    copilotConflictResolutionModel,
+    active,
+    tutorialStarted,
+    tutorialRepoCreated,
+    tutorialEditorInstalled,
+    tutorialBranchCreated,
+    tutorialFileEdited,
+    tutorialCommitCreated,
+    tutorialBranchPushed,
+    tutorialPrCreated,
+    tutorialCompleted,
+  })
+
+  // Central rounded decimal measures to integers for us.
+  const measures = {
+    ...remainingMeasures,
+    mainReadyTime: Math.round(mainReadyTime),
+    loadTime: Math.round(loadTime),
+    rendererReadyTime: Math.round(rendererReadyTime),
+  }
+
+  return {
+    events: [
+      {
+        app: 'desktop',
+        event_type: eventType,
+        dimensions,
+        measures,
+      },
+    ],
+  }
+}
+
+const defaultPostImplementation = (body: StatsPayload) => {
+  if (enableNewStatsEndpoint()) {
+    return fetch(StatsEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'user-agent': getUserAgent(),
+      },
+      body: JSON.stringify(buildStatsPayload(body)),
+    })
+  }
+
+  return fetch(LegacyStatsEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -455,6 +665,7 @@ const defaultPostImplementation = (body: Record<string, any>) =>
     },
     body: JSON.stringify(body),
   })
+}
 
 /** The store for the app's stats. */
 export class StatsStore implements IStatsStore {
@@ -462,6 +673,7 @@ export class StatsStore implements IStatsStore {
 
   /** Has the user opted out of stats reporting? */
   private optOut: boolean
+  private usesShortLivedToken = false
 
   public constructor(
     private readonly db: StatsDatabase,
@@ -496,6 +708,25 @@ export class StatsStore implements IStatsStore {
     return now - lastDate > DailyStatsReportInterval
   }
 
+  /** Update installation-level short-lived-token usage from the account list. */
+  public setUsesShortLivedToken(value: boolean): void {
+    this.usesShortLivedToken = value
+  }
+
+  /** Count a single token refresh lifecycle event without credential metadata. */
+  public recordTokenRefreshEvent(event: TokenRefreshEvent): Promise<void> {
+    const measures: Readonly<Record<TokenRefreshEvent, keyof NumericMeasures>> =
+      {
+        attempt: 'tokenRefreshAttemptCount',
+        success: 'tokenRefreshSuccessCount',
+        'transient-failure': 'tokenRefreshTransientFailureCount',
+        'non-transient-failure': 'tokenRefreshNonTransientFailureCount',
+        abandoned: 'tokenRefreshAbandonedCount',
+        'required-sign-in': 'tokenRefreshRequiredSignInCount',
+      }
+    return this.increment(measures[event])
+  }
+
   /** Report any stats which are eligible for reporting. */
   public async reportStats(
     accounts: ReadonlyArray<Account>,
@@ -521,6 +752,25 @@ export class StatsStore implements IStatsStore {
     }
 
     const now = Date.now()
+
+    if (await this.sendStats(accounts, repositories)) {
+      await this.clearDailyStats()
+      setNumber(LastDailyStatsReportKey, now)
+    }
+  }
+
+  /**
+   * Send the current stats immediately without clearing them or updating the
+   * daily reporting schedule.
+   */
+  public async sendStats(
+    accounts: ReadonlyArray<Account>,
+    repositories: ReadonlyArray<Repository>
+  ): Promise<boolean> {
+    if (this.optOut) {
+      return false
+    }
+
     const payload = await this.getDailyStats(accounts, repositories)
 
     try {
@@ -532,11 +782,10 @@ export class StatsStore implements IStatsStore {
       }
 
       log.info('Stats reported.')
-
-      await this.clearDailyStats()
-      setNumber(LastDailyStatsReportKey, now)
+      return true
     } catch (e) {
       log.error('Error reporting stats:', e)
+      return false
     }
   }
 
@@ -625,7 +874,7 @@ export class StatsStore implements IStatsStore {
 
     return {
       eventType: 'usage',
-      version: getVersion(),
+      version: __RELEASE_CHANNEL__ === 'development' ? 'dev' : getVersion(),
       osVersion: getOS(),
       platform: process.platform,
       architecture: await getAppArchitecture(),
@@ -633,6 +882,8 @@ export class StatsStore implements IStatsStore {
       selectedTerminalEmulator,
       selectedTextEditor,
       notificationsEnabled: getNotificationsEnabled(),
+      notificationsPermission: await getSystemNotificationsPermission(),
+      usesShortLivedToken: this.usesShortLivedToken,
       ...launchStats,
       ...dailyMeasures,
       ...userType,
@@ -646,7 +897,39 @@ export class StatsStore implements IStatsStore {
       diffCheckMarksVisible,
       useExternalCredentialHelper,
       filteringChangesEnabled,
+      gitHooksEnvEnabled: getHooksEnvEnabled(),
+      copilotConflictResolutionModel:
+        this.getSelectedCopilotConflictResolutionModel(),
     }
+  }
+
+  /**
+   * Reads the user's selected Copilot conflict resolution model from
+   * localStorage and resolves it to the actual model ID string.
+   */
+  private getSelectedCopilotConflictResolutionModel(): string {
+    try {
+      const raw = localStorage.getItem('selected-copilot-models-by-account')
+      if (raw !== null) {
+        const parsed: unknown = JSON.parse(raw)
+        if (typeof parsed === 'object' && parsed !== null) {
+          for (const selections of Object.values(parsed)) {
+            if (typeof selections === 'object' && selections !== null) {
+              const selection = (selections as Record<string, unknown>)[
+                'conflict-resolution'
+              ]
+              if (typeof selection === 'string' && selection.length > 0) {
+                const key = parseModelKey(selection)
+                return key.modelId || DefaultCopilotModel
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Fall through to default
+    }
+    return DefaultCopilotModel
   }
 
   private getOnboardingStats(): IOnboardingStats {
@@ -1122,10 +1405,21 @@ export class StatsStore implements IStatsStore {
     return this.increment(statField)
   }
 
-  public recordPullRequestReviewNotificationShown(
+  /** Records a PR review Alive event eligible for a notification. */
+  public recordPullRequestReviewNotification(
     reviewType: ValidNotificationPullRequestReviewState
   ): Promise<void> {
     return this.recordPullRequestReviewStat(reviewType, 'NotificationCount')
+  }
+
+  /** Records a PR review notification accepted with OS permission. */
+  public recordPullRequestReviewNotificationShown(
+    reviewType: ValidNotificationPullRequestReviewState
+  ): Promise<void> {
+    return this.recordPullRequestReviewStat(
+      reviewType,
+      'NotificationShownCount'
+    )
   }
 
   public recordPullRequestReviewNotificationClicked(
@@ -1141,6 +1435,13 @@ export class StatsStore implements IStatsStore {
       reviewType,
       'DialogSwitchToPullRequestCount'
     )
+  }
+
+  /** Mark the maximum number of worktrees observed in a repository */
+  public recordWorktreeCount(count: number): Promise<void> {
+    return this.updateDailyMeasures(m => ({
+      worktreeMaxCount: Math.max(m.worktreeMaxCount, count),
+    }))
   }
 
   public increment = (k: keyof NumericMeasures, n = 1) =>

@@ -2,6 +2,7 @@ import * as Path from 'path'
 import * as React from 'react'
 
 import { DiffSelectionType } from '../../models/diff'
+import { ICommitSuggestion } from '../../models/commit-suggestion'
 import {
   IChangesState,
   RebaseConflictState,
@@ -61,9 +62,7 @@ interface IChangesSidebarProps {
   readonly isGeneratingCommitMessage: boolean
   readonly shouldShowGenerateCommitMessageCallOut: boolean
   readonly commitToAmend: Commit | null
-  readonly commitSuggestions: ReadonlyArray<
-    import('../../models/commit-suggestion').ICommitSuggestion
-  > | null
+  readonly commitSuggestions: ReadonlyArray<ICommitSuggestion> | null
   readonly isPushPullFetchInProgress: boolean
   // Used in receiveProps, no-unused-prop-types doesn't know that
   // eslint-disable-next-line react/no-unused-prop-types
@@ -98,12 +97,6 @@ interface IChangesSidebarProps {
 
   /** Whether or not to show the changes filter */
   readonly showChangesFilter: boolean
-
-  /**
-   * Whether there are any hooks in the repository that could be
-   * skipped during commit with the --no-verify flag
-   */
-  readonly hasCommitHooks: boolean
 
   /**
    * Whether or not to skip blocking commit hooks when creating commits
@@ -275,12 +268,25 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
     })
   }
 
-  private onIgnoreFile = (file: string | string[]) => {
-    this.props.dispatcher.appendIgnoreFile(this.props.repository, file)
+  private onIgnoreFile = async (file: string | string[]) => {
+    try {
+      await this.props.dispatcher.appendIgnoreFile(this.props.repository, file)
+    } catch (error) {
+      log.error('Failed to ignore file(s)', error)
+      await this.props.dispatcher.postError(error)
+    }
   }
 
-  private onIgnorePattern = (pattern: string | string[]) => {
-    this.props.dispatcher.appendIgnoreRule(this.props.repository, pattern)
+  private onIgnorePattern = async (pattern: string | string[]) => {
+    try {
+      await this.props.dispatcher.appendIgnoreRule(
+        this.props.repository,
+        pattern
+      )
+    } catch (error) {
+      log.error('Failed to ignore pattern(s)', error)
+      await this.props.dispatcher.postError(error)
+    }
   }
 
   /**
@@ -494,7 +500,6 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
           accounts={this.props.accounts}
           fileListFilter={this.props.changes.fileListFilter}
           showChangesFilter={this.props.showChangesFilter}
-          hasCommitHooks={this.props.hasCommitHooks}
           skipCommitHooks={this.props.skipCommitHooks}
           signOffCommits={this.props.signOffCommits}
           allowEmptyCommit={this.props.allowEmptyCommit}

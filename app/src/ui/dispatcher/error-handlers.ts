@@ -18,7 +18,7 @@ import {
 import { hasWritePermission } from '../../models/github-repository'
 import { RetryActionType } from '../../models/retry-actions'
 import { parseFilesToBeOverwritten } from '../lib/parse-files-to-be-overwritten'
-import { pathExists } from '../lib/path-exists'
+import { pathExists } from '../../lib/path-exists'
 import {
   ISecretLocation,
   ISecretScanResult,
@@ -426,7 +426,7 @@ export async function refusedWorkflowUpdate(
 }
 
 const samlReauthErrorMessageRe =
-  /`([^']+)' organization has enabled or enforced SAML SSO.*?you must re-authorize/s
+  /'([^']+)' organization has enabled or enforced SAML SSO.*?you must re-authorize/s
 
 /**
  * Attempts to detect whether an error is the result of a failed push

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { clipboard } from 'electron'
+import { writeClipboardText } from '../main-process-proxy'
 import * as Path from 'path'
 
 import { Repository } from '../../models/repository'
@@ -32,7 +32,7 @@ import { IMenuItem } from '../../lib/menu-item'
 import { IChangesetData } from '../../lib/git'
 import { IConstrainedValue } from '../../lib/app-state'
 import { clamp } from '../../lib/clamp'
-import { pathExists } from '../lib/path-exists'
+import { pathExists } from '../../lib/path-exists'
 import { UnreachableCommitsTab } from './unreachable-commits-dialog'
 import { ExpandableCommitSummary } from './expandable-commit-summary'
 import { DiffHeader } from '../diff/diff-header'
@@ -421,11 +421,11 @@ export class SelectedCommits extends React.Component<
       { type: 'separator' },
       {
         label: CopyFilePathLabel,
-        action: () => clipboard.writeText(fullPath),
+        action: () => writeClipboardText(fullPath),
       },
       {
         label: CopyRelativeFilePathLabel,
-        action: () => clipboard.writeText(Path.normalize(file.path)),
+        action: () => writeClipboardText(Path.normalize(file.path)),
       },
       { type: 'separator' },
     ]

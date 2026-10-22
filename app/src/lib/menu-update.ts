@@ -11,6 +11,7 @@ import { updateMenuState as ipcUpdateMenuState } from '../ui/main-process-proxy'
 import { AppMenu, MenuItem } from '../models/app-menu'
 import { hasConflictedFiles } from './status'
 import { findContributionTargetDefaultBranch } from './branch'
+import { enableCopilotAppHandoff, enableWorktreeSupport } from './feature-flag'
 
 export interface IMenuItemState {
   readonly enabled?: boolean
@@ -130,6 +131,7 @@ const allMenuIds: ReadonlyArray<MenuIDs> = [
   'open-working-directory',
   'show-repository-settings',
   'open-external-editor',
+  ...(enableCopilotAppHandoff() ? (['open-in-copilot-app'] as const) : []),
   'open-with-external-editor',
   'remove-repository',
   'new-repository',
@@ -140,6 +142,8 @@ const allMenuIds: ReadonlyArray<MenuIDs> = [
   'preview-pull-request',
   'squash-and-merge-branch',
   'toggle-stashed-changes',
+  'create-worktree',
+  'show-worktrees-list',
 ]
 
 function getAllMenusDisabledBuilder(): MenuStateBuilder {
@@ -244,10 +248,13 @@ function getRepositoryMenuBuilder(state: IAppState): MenuStateBuilder {
     'show-changes',
     'show-history',
     'show-branches-list',
+    'show-worktrees-list',
     'open-external-editor',
+    ...(enableCopilotAppHandoff() ? (['open-in-copilot-app'] as const) : []),
     'open-with-external-editor',
     'compare-to-branch',
     'toggle-changes-filter',
+    'create-worktree',
   ]
 
   const menuStateBuilder = new MenuStateBuilder()
@@ -259,6 +266,11 @@ function getRepositoryMenuBuilder(state: IAppState): MenuStateBuilder {
   if (repositoryActive) {
     for (const id of repositoryScopedIDs) {
       menuStateBuilder.enable(id)
+    }
+
+    if (!enableWorktreeSupport()) {
+      menuStateBuilder.disable('show-worktrees-list')
+      menuStateBuilder.disable('create-worktree')
     }
 
     menuStateBuilder.setEnabled(

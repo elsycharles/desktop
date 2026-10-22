@@ -1,4 +1,12 @@
 /**
+ * Hunk numbers (1-based, in the order they appear in the file's diff) keyed
+ * by file path.
+ */
+export type CommitSuggestionHunks = Readonly<
+  Record<string, ReadonlyArray<number>>
+>
+
+/**
  * Represents a single AI-suggested commit from the smart split feature.
  * Each suggestion groups semantically related files with an AI-generated
  * commit message.
@@ -10,15 +18,15 @@ export interface ICommitSuggestion {
   readonly description: string
   /** File paths belonging to this commit group */
   readonly files: ReadonlyArray<string>
+  /**
+   * For files split across several suggestions, the hunks of that file that
+   * belong to this suggestion. Files without an entry are committed whole
+   * (or share their hunks evenly when Copilot didn't say how to split them).
+   */
+  readonly hunks: CommitSuggestionHunks
   /** Whether this suggestion is included for committing */
   readonly enabled: boolean
 }
 
-/** The response shape returned by the AI for smart commit splitting */
-export interface ISmartCommitSplitResponse {
-  readonly suggestions: ReadonlyArray<{
-    readonly summary: string
-    readonly description: string
-    readonly files: ReadonlyArray<string>
-  }>
-}
+/** A commit suggestion as returned by the AI, before the user toggles it */
+export type SmartCommitSuggestion = Omit<ICommitSuggestion, 'enabled'>

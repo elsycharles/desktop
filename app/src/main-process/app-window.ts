@@ -153,6 +153,11 @@ export class AppWindow {
     })
   }
 
+  /** The main renderer, used to authenticate and target IPC requests. */
+  public get webContents(): Electron.WebContents {
+    return this.window.webContents
+  }
+
   public load() {
     let startLoad = 0
     // We only listen for the first of the loading events to avoid a bug in
@@ -201,7 +206,16 @@ export class AppWindow {
     )
 
     registerWindowStateChangedEvents(this.window)
-    this.window.loadURL(encodePathAsUrl(__dirname, 'index.html'))
+
+    // We want to have the locale country code available in the renderer on load
+    // so that it can be used to try to deduce some sane date/time/number
+    // formatting defaults. This is a bit of a hack but it avoids the need to
+    // have an IPC round trip to get that information from the main process.
+    const localeCountryCode = app.getLocaleCountryCode() ?? ''
+    this.window.loadURL(
+      encodePathAsUrl(__dirname, 'index.html') +
+        `#lc=${encodeURIComponent(localeCountryCode)}`
+    )
 
     nativeTheme.addListener('updated', () => {
       ipcWebContents.send(this.window.webContents, 'native-theme-updated')
@@ -508,7 +522,7 @@ const trySetUpdaterGuid = async (url: string) => {
     const parsed = new URL(url)
     parsed.searchParams.set('guid', id)
     return parsed.toString()
-  } catch (e) {
+  } catch {
     return url
   }
 }

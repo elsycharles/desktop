@@ -3,9 +3,13 @@ import { Octicon, OcticonSymbol } from '../octicons'
 import * as octicons from '../octicons/octicons.generated'
 import classNames from 'classnames'
 import { GitHubRepository } from '../../models/github-repository'
-import { DisposableLike } from 'event-kit'
+import type { Disposable } from 'event-kit'
 import { Dispatcher } from '../dispatcher'
-import { ICombinedRefCheck, IRefCheck } from '../../lib/ci-checks/ci-checks'
+import {
+  getCheckRunConclusionAdjective,
+  ICombinedRefCheck,
+  IRefCheck,
+} from '../../lib/ci-checks/ci-checks'
 import { IAPIWorkflowJobStep } from '../../lib/api'
 
 interface ICIStatusProps {
@@ -33,7 +37,7 @@ export class CIStatus extends React.PureComponent<
   ICIStatusProps,
   ICIStatusState
 > {
-  private statusSubscription: DisposableLike | null = null
+  private statusSubscription: Disposable | null = null
 
   public constructor(props: ICIStatusProps) {
     super(props)
@@ -111,6 +115,7 @@ export class CIStatus extends React.PureComponent<
           this.props.className
         )}
         symbol={getSymbolForCheck(check)}
+        title={`Checks: ${getCheckRunConclusionAdjective(check.conclusion)}`}
       />
     )
   }

@@ -40,6 +40,146 @@ function saveFormat(repository: Repository, config: ICommitFormatConfig): void {
   }
 }
 
+interface ISuggestedCommitCardProps {
+  readonly index: number
+  readonly suggestion: ICommitSuggestion
+  /** The summary to display (which may be a local, unsaved edit) */
+  readonly summary: string
+  /** The description to display (which may be a local, unsaved edit) */
+  readonly description: string
+  readonly isExpanded: boolean
+  readonly isFirst: boolean
+  readonly isLast: boolean
+  readonly isBusy: boolean
+  readonly onToggleEnabled: (index: number) => void
+  readonly onSummaryChanged: (index: number, value: string) => void
+  readonly onSummaryBlur: (index: number) => void
+  readonly onDescriptionChanged: (index: number, value: string) => void
+  readonly onDescriptionBlur: (index: number) => void
+  readonly onMoveUp: (index: number) => void
+  readonly onMoveDown: (index: number) => void
+  readonly onToggleExpanded: (index: number) => void
+}
+
+/** A single editable suggestion of the Smart Split list */
+class SuggestedCommitCard extends React.Component<ISuggestedCommitCardProps> {
+  private onToggleEnabled = () => this.props.onToggleEnabled(this.props.index)
+
+  private onSummaryChanged = (value: string) =>
+    this.props.onSummaryChanged(this.props.index, value)
+
+  private onSummaryBlur = () => this.props.onSummaryBlur(this.props.index)
+
+  private onDescriptionChanged = (e: React.ChangeEvent<HTMLTextAreaElement>) =>
+    this.props.onDescriptionChanged(this.props.index, e.currentTarget.value)
+
+  private onDescriptionBlur = () =>
+    this.props.onDescriptionBlur(this.props.index)
+
+  private onMoveUp = () => this.props.onMoveUp(this.props.index)
+
+  private onMoveDown = () => this.props.onMoveDown(this.props.index)
+
+  private onToggleExpanded = () => this.props.onToggleExpanded(this.props.index)
+
+  public render() {
+    const { suggestion, isExpanded, isFirst, isLast, isBusy } = this.props
+    const cardClassName = `suggested-commit-card${
+      suggestion.enabled ? '' : ' disabled'
+    }`
+
+    return (
+      <div className={cardClassName}>
+        <div className="suggested-commit-card-header">
+          <label className="suggested-commit-toggle">
+            <input
+              type="checkbox"
+              checked={suggestion.enabled}
+              onChange={this.onToggleEnabled}
+              disabled={isBusy}
+              aria-label="Include this commit"
+            />
+          </label>
+          <TextBox
+            className="suggested-commit-summary"
+            value={this.props.summary}
+            onValueChanged={this.onSummaryChanged}
+            onBlur={this.onSummaryBlur}
+            placeholder="Commit summary"
+            disabled={!suggestion.enabled || isBusy}
+          />
+          <div className="suggested-commit-reorder">
+            <button
+              className="reorder-btn"
+              onClick={this.onMoveUp}
+              disabled={isFirst || isBusy}
+              aria-label="Move up"
+            >
+              <Octicon symbol={octicons.chevronUp} />
+            </button>
+            <button
+              className="reorder-btn"
+              onClick={this.onMoveDown}
+              disabled={isLast || isBusy}
+              aria-label="Move down"
+            >
+              <Octicon symbol={octicons.chevronDown} />
+            </button>
+          </div>
+        </div>
+
+        <button
+          className={`suggested-commit-expand-toggle${
+            isExpanded ? ' expanded' : ''
+          }`}
+          onClick={this.onToggleExpanded}
+          disabled={isBusy}
+          aria-label={
+            isExpanded ? 'Collapse description' : 'Expand description'
+          }
+          aria-expanded={isExpanded}
+        >
+          <Octicon
+            symbol={isExpanded ? octicons.chevronDown : octicons.chevronRight}
+          />
+          <span className="expand-label">Description</span>
+        </button>
+
+        {isExpanded && (
+          <textarea
+            className="suggested-commit-description"
+            value={this.props.description}
+            onChange={this.onDescriptionChanged}
+            onBlur={this.onDescriptionBlur}
+            placeholder="Optional description"
+            disabled={!suggestion.enabled || isBusy}
+            rows={3}
+          />
+        )}
+
+        <div className="suggested-commit-files">
+          {suggestion.files.map(file => {
+            const hunks = suggestion.hunks[file]
+            return (
+              <span className="suggested-commit-file" key={file}>
+                <Octicon symbol={octicons.file} />
+                {file}
+                {hunks !== undefined && (
+                  <span className="suggested-commit-file-hunks">
+                    {` · hunk${hunks.length !== 1 ? 's' : ''} ${hunks.join(
+                      ', '
+                    )}`}
+                  </span>
+                )}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+}
+
 interface ISuggestedCommitListProps {
   readonly suggestions: ReadonlyArray<ICommitSuggestion>
   readonly isCommitting: boolean
@@ -49,7 +189,7 @@ interface ISuggestedCommitListProps {
   readonly onSuggestionsUpdated: (
     suggestions: ReadonlyArray<ICommitSuggestion>
   ) => void
-  readonly onCommitAll: (suggestions: ReadonlyArray<ICommitSuggestion>) => void
+  readonly onCommitAll: () => void
   readonly onRegenerate: (formatConfig?: ICommitFormatConfig) => void
   readonly onDismiss: () => void
 }
@@ -188,7 +328,7 @@ export class SuggestedCommitList extends React.Component<
   }
 
   private onCommitAll = () => {
-    this.props.onCommitAll(this.props.suggestions)
+    this.props.onCommitAll()
   }
 
   private onToggleFormatPanel = () => {
@@ -230,108 +370,14 @@ export class SuggestedCommitList extends React.Component<
     )
   }
 
-  private renderSuggestionCard(
-    suggestion: ICommitSuggestion,
-    index: number
-  ): JSX.Element {
-    const isExpanded = this.state.expandedIndex === index
-    const isFirst = index === 0
-    const isLast = index === this.props.suggestions.length - 1
-    const isBusy = this.props.isCommitting || this.props.isLoading
-    const cardClassName = `suggested-commit-card${
-      suggestion.enabled ? '' : ' disabled'
-    }`
-
-    return (
-      <div className={cardClassName} key={index}>
-        <div className="suggested-commit-card-header">
-          <label className="suggested-commit-toggle">
-            <input
-              type="checkbox"
-              checked={suggestion.enabled}
-              onChange={() => this.onToggleEnabled(index)}
-              disabled={isBusy}
-            />
-          </label>
-          <TextBox
-            className="suggested-commit-summary"
-            value={this.state.editingSummaries.get(index) ?? suggestion.summary}
-            onValueChanged={value => this.onSummaryChanged(index, value)}
-            onBlur={() => this.onSummaryBlur(index)}
-            placeholder="Commit summary"
-            disabled={!suggestion.enabled || isBusy}
-          />
-          <div className="suggested-commit-reorder">
-            <button
-              className="reorder-btn"
-              onClick={() => this.onMoveUp(index)}
-              disabled={isFirst || isBusy}
-              aria-label="Move up"
-              title="Move up"
-            >
-              <Octicon symbol={octicons.chevronUp} />
-            </button>
-            <button
-              className="reorder-btn"
-              onClick={() => this.onMoveDown(index)}
-              disabled={isLast || isBusy}
-              aria-label="Move down"
-              title="Move down"
-            >
-              <Octicon symbol={octicons.chevronDown} />
-            </button>
-          </div>
-        </div>
-
-        <button
-          className={`suggested-commit-expand-toggle${
-            isExpanded ? ' expanded' : ''
-          }`}
-          onClick={() => this.onToggleExpanded(index)}
-          disabled={isBusy}
-          aria-label={
-            isExpanded ? 'Collapse description' : 'Expand description'
-          }
-          aria-expanded={isExpanded}
-        >
-          <Octicon
-            symbol={isExpanded ? octicons.chevronDown : octicons.chevronRight}
-          />
-          <span className="expand-label">Description</span>
-        </button>
-
-        {isExpanded && (
-          <textarea
-            className="suggested-commit-description"
-            value={
-              this.state.editingDescriptions.get(index) ??
-              suggestion.description
-            }
-            onChange={e =>
-              this.onDescriptionChanged(index, e.currentTarget.value)
-            }
-            onBlur={() => this.onDescriptionBlur(index)}
-            placeholder="Optional description"
-            disabled={!suggestion.enabled || isBusy}
-            rows={3}
-          />
-        )}
-
-        <div className="suggested-commit-files">
-          {suggestion.files.map(file => (
-            <span className="suggested-commit-file" key={file}>
-              <Octicon symbol={octicons.file} />
-              {file}
-            </span>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
   public render() {
     const { suggestions, isCommitting, isLoading } = this.props
     const enabledCount = suggestions.filter(s => s.enabled).length
+    const hasEmptySummary = suggestions.some(
+      (s, i) =>
+        s.enabled &&
+        (this.state.editingSummaries.get(i) ?? s.summary).trim().length === 0
+    )
     const isBusy = isCommitting || isLoading
     const hasCustomFormat = this.state.formatTemplate.trim().length > 0
 
@@ -366,11 +412,12 @@ export class SuggestedCommitList extends React.Component<
               className={formatToggleClassName}
               onClick={this.onToggleFormatPanel}
               disabled={isBusy}
-              title={
+              aria-label={
                 hasCustomFormat
                   ? 'Custom format active — click to edit'
                   : 'Configure commit format'
               }
+              aria-expanded={this.state.formatPanelOpen}
             >
               <Octicon symbol={octicons.pencil} />
               <span>Format</span>
@@ -385,14 +432,41 @@ export class SuggestedCommitList extends React.Component<
         {this.renderFormatPanel()}
 
         <div className={cardsClassName}>
-          {suggestions.map((s, i) => this.renderSuggestionCard(s, i))}
+          {suggestions.map((s, i) => (
+            <SuggestedCommitCard
+              key={i}
+              index={i}
+              suggestion={s}
+              summary={this.state.editingSummaries.get(i) ?? s.summary}
+              description={
+                this.state.editingDescriptions.get(i) ?? s.description
+              }
+              isExpanded={this.state.expandedIndex === i}
+              isFirst={i === 0}
+              isLast={i === suggestions.length - 1}
+              isBusy={isBusy}
+              onToggleEnabled={this.onToggleEnabled}
+              onSummaryChanged={this.onSummaryChanged}
+              onSummaryBlur={this.onSummaryBlur}
+              onDescriptionChanged={this.onDescriptionChanged}
+              onDescriptionBlur={this.onDescriptionBlur}
+              onMoveUp={this.onMoveUp}
+              onMoveDown={this.onMoveDown}
+              onToggleExpanded={this.onToggleExpanded}
+            />
+          ))}
         </div>
 
         <div className="suggested-commit-list-actions">
           <Button
             className="commit-all-button"
             type="submit"
-            disabled={enabledCount === 0 || isBusy}
+            disabled={enabledCount === 0 || hasEmptySummary || isBusy}
+            tooltip={
+              hasEmptySummary
+                ? 'Every selected commit needs a summary'
+                : undefined
+            }
             onClick={this.onCommitAll}
           >
             <>

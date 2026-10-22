@@ -21,7 +21,7 @@ export interface IAutocompletionProvider<T> {
    * The type of auto completion provided this instance implements. Used
    * for variable width auto completion popups depending on type.
    */
-  kind: 'emoji' | 'user' | 'issue'
+  kind: 'emoji' | 'user' | 'issue' | 'branch'
 
   /**
    * Get the regex which it used to capture text for the provider. The text
@@ -41,8 +41,14 @@ export interface IAutocompletionProvider<T> {
   /**
    * Render the autocompletion item. The item will be one which the provider
    * returned from `getAutocompletionItems`.
+   *
+   * @param selected Whether this is the currently selected item in the
+   *                 autocompletion list. The list itself never receives DOM
+   *                 focus (it's driven by `aria-activedescendant` on the
+   *                 input), so providers need this to surface any focus
+   *                 affordances, such as tooltips, to keyboard users.
    */
-  renderItem(item: T): JSX.Element
+  renderItem(item: T, selected: boolean): JSX.Element
 
   /** Returns the aria-label attribute for the rendered item. Optional. */
   getItemAriaLabel?(item: T): string
