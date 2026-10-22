@@ -1,5 +1,5 @@
 import { spawn, SpawnOptions } from 'child_process'
-import { pathExists } from '../path-exists'
+import { pathExists, spawnEditor } from '../helpers/linux'
 import { ExternalEditorError, FoundEditor } from './shared'
 import {
   expandTargetPathArgument,
@@ -33,6 +33,8 @@ async function launchEditor(
 
     const child = spawnAsDarwinApp
       ? spawn('open', ['-a', editorPath, ...args], opts)
+      : __LINUX__
+      ? spawnEditor(editorPath, args, opts)
       : spawn(editorPath, args, opts)
 
     child.on('error', reject)

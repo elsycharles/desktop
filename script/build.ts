@@ -23,7 +23,7 @@ export interface ILicense {
   readonly hidden: boolean
 }
 
-type DesktopPackageArch = 'arm64' | 'x64'
+type DesktopPackageArch = 'arm64' | 'x64' | 'armv7l'
 type DesktopPackagePlatform = 'darwin' | 'linux' | 'win32'
 
 interface IDesktopPackagerModule {
@@ -162,16 +162,18 @@ async function packageApp() {
   const toPackageArch = (
     targetArch: string | undefined
   ): DesktopPackageArch => {
-    if (targetArch === undefined) {
-      targetArch = os.arch()
+    const arch = targetArch ?? process.env.npm_config_arch ?? os.arch()
+
+    if (arch === 'arm64' || arch === 'x64') {
+      return arch
     }
 
-    if (targetArch === 'arm64' || targetArch === 'x64') {
-      return targetArch
+    if (arch === 'arm') {
+      return 'armv7l'
     }
 
     throw new Error(
-      `Building Desktop for architecture '${targetArch}' is not supported`
+      `Building Desktop for architecture '${arch}' is not supported. Currently these architectures are supported: arm, arm64, x64`
     )
   }
 

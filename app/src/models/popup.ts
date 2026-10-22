@@ -125,6 +125,7 @@ export enum PopupType {
   ConfirmDeleteCopilotBYOKProvider = 'ConfirmDeleteCopilotBYOKProvider',
   CopilotConflictResolutionAlwaysNudge = 'CopilotConflictResolutionAlwaysNudge',
   DeleteWorktreeFailed = 'DeleteWorktreeFailed',
+  ConfirmRestart = 'ConfirmRestart',
 }
 
 interface IBasePopup {
@@ -564,4 +565,6 @@ export type PopupDetail =
       originalWorktree: WorktreeEntry | null
       options: IDeleteWorktreeOptions
     }
+  | { type: PopupType.ConfirmRestart }
+
 export type Popup = IBasePopup & PopupDetail

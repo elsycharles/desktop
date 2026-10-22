@@ -114,8 +114,8 @@ export class WindowControls extends React.Component<{}, IWindowControlState> {
   }
 
   public render() {
-    // We only know how to render fake Windows-y controls
-    if (!__WIN32__) {
+    // There are no custom window controls on macOS
+    if (__DARWIN__) {
       return <span />
     }
 

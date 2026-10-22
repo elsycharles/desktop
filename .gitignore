@@ -20,3 +20,4 @@ junit*.xml
 *.swp
 tslint-rules/
 playwright-videos/
+script/release_notes.txt

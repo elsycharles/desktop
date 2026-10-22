@@ -27,6 +27,8 @@ function renderAppearance(alwaysShowWorktreeList = false) {
     onPreferAbsoluteDatesChanged: () => {},
     alwaysShowWorktreeList,
     onAlwaysShowWorktreeListChanged: (value: boolean) => changes.push(value),
+    titleBarStyle: 'native' as const,
+    onTitleBarStyleChanged: () => {},
   }
   const view = render(<Appearance {...props} />)
   return { ...view, props, changes }

@@ -13,7 +13,7 @@ import { IUpdateState, UpdateStatus } from '../lib/update-store'
 import { Loading } from '../lib/loading'
 import { RelativeTime } from '../relative-time'
 import { assertNever } from '../../lib/fatal-error'
-import { ReleaseNotesUri } from '../lib/releases'
+import { ReleaseNotesUri, LinuxReleasesUri } from '../lib/releases'
 import { encodePathAsUrl } from '../../lib/path'
 import { isOSNoLongerSupportedByElectron } from '../../lib/get-os'
 import { AriaLiveContainer } from '../accessibility/aria-live-container'
@@ -100,6 +100,17 @@ export class About extends React.Component<IAboutProps> {
       return null
     }
 
+    if (__LINUX__) {
+      const linuxReleaseLink = (
+        <LinkButton uri={LinuxReleasesUri}>View Releases</LinkButton>
+      )
+      return (
+        <Row>
+          <p className="no-padding">{linuxReleaseLink}</p>
+        </Row>
+      )
+    }
+
     const updateStatus = this.props.updateState.status
 
     switch (updateStatus) {
@@ -143,7 +154,12 @@ export class About extends React.Component<IAboutProps> {
 
   private renderUpdateDetails() {
     if (__LINUX__) {
-      return null
+      return (
+        <p>
+          Please visit the GitHub Desktop for Linux release page for
+          Linux-specific release notes and to download the latest version.
+        </p>
+      )
     }
 
     if (!this.canCheckForUpdates) {
@@ -232,6 +248,10 @@ export class About extends React.Component<IAboutProps> {
 
   private renderBetaLink() {
     if (__RELEASE_CHANNEL__ === 'beta') {
+      return
+    }
+
+    if (__LINUX__) {
       return
     }
 

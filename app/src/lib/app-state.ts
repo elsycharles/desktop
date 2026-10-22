@@ -47,6 +47,7 @@ import { WindowState } from './window-state'
 import { Shell } from './shells'
 
 import { ApplicableTheme, ApplicationTheme } from '../ui/lib/application-theme'
+import { TitleBarStyle } from '../ui/lib/title-bar-style'
 import { IAccountRepositories } from './stores/api-repositories-store'
 import { ManualConflictResolution } from '../models/manual-conflict-resolution'
 import { Banner } from '../models/banner'
@@ -326,6 +327,9 @@ export interface IAppState {
 
   /** Whether to show the worktree dropdown even without linked worktrees. */
   readonly alwaysShowWorktreeList: boolean
+
+  /** The selected title bar style for the application */
+  readonly titleBarStyle: TitleBarStyle
 
   /**
    * A map keyed on a user account (GitHub.com or GitHub Enterprise)
