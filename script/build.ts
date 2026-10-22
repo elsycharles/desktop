@@ -231,7 +231,10 @@ async function packageApp() {
     darwinDarkModeSupport: true,
     osxSign: {
       optionsForFile: (path: string) => ({
-        hardenedRuntime: true,
+        // The hardened runtime is required for notarization, but with ad-hoc
+        // signatures it makes library validation reject the Electron framework
+        // and the app can't start.
+        hardenedRuntime: isPublishableBuild,
         entitlements: entitlementsPath,
       }),
       type: isPublishableBuild ? 'distribution' : 'development',
