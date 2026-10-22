@@ -1,0 +1,43 @@
+name: Sync upstream development
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPOSITORY: desktop/desktop
+  UPSTREAM_BRANCH: development
+  TARGET_BRANCH: development
+
+jobs:
+  sync:
+    name: Merge upstream development
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out target branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream branch
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+
+      - name: Merge upstream changes
+        run: |
+          git checkout "${TARGET_BRANCH}"
+          git merge --no-edit "upstream/${UPSTREAM_BRANCH}"
+
+      - name: Push synchronized branch
+        run: git push origin "HEAD:${TARGET_BRANCH}"
