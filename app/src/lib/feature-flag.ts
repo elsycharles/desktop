@@ -33,8 +33,23 @@ function enableDevelopmentFeatures(): boolean {
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 //@ts-ignore: this will be used again in the future
 function enableBetaFeatures(): boolean {
-  return enableDevelopmentFeatures() || __RELEASE_CHANNEL__ === 'beta'
+  return (
+    enableDevelopmentFeatures() ||
+    __RELEASE_CHANNEL__ === 'beta' ||
+    // Releases of this fork are built for the 'fork' channel and get the same
+    // features (Copilot SDK…) as the development builds they were tested with.
+    __RELEASE_CHANNEL__ === 'fork'
+  )
 }
+
+/**
+ * Should the app update itself automatically?
+ *
+ * Never in this fork: updates come from GitHub's update server, so updating
+ * would replace this build with the official GitHub Desktop (without Smart
+ * Split). New versions are published on the fork's releases page instead.
+ */
+export const enableAutoUpdates = () => false
 
 /**
  * Should the app show menu items that are used for testing various parts of the

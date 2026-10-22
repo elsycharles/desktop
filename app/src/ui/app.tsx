@@ -201,6 +201,7 @@ import { TestCLIActionDialog } from './cli-action/test-cli-action-dialog'
 import { TestCopilotSnapshotCardDialog } from './preferences/test-copilot-snapshot-card-dialog'
 import { TestTokenExpirationDialog } from './preferences/test-token-expiration-dialog'
 import {
+  enableAutoUpdates,
   enableCopilotSdkCommitMessageGeneration,
   enableCopilotAppHandoff,
   enableWorktreeSupport,
@@ -398,7 +399,8 @@ export class App extends React.Component<IAppProps, IAppState> {
     // We only want to automatically check for updates on beta and prod
     if (
       __RELEASE_CHANNEL__ !== 'development' &&
-      __RELEASE_CHANNEL__ !== 'test'
+      __RELEASE_CHANNEL__ !== 'test' &&
+      enableAutoUpdates()
     ) {
       setInterval(() => this.checkForUpdates(true), UpdateCheckInterval)
       this.checkForUpdates(true)
@@ -660,7 +662,11 @@ export class App extends React.Component<IAppProps, IAppState> {
     inBackground: boolean,
     skipGuidCheck: boolean = false
   ) {
-    if (__LINUX__ || __RELEASE_CHANNEL__ === 'development') {
+    if (
+      __LINUX__ ||
+      __RELEASE_CHANNEL__ === 'development' ||
+      !enableAutoUpdates()
+    ) {
       return
     }
 

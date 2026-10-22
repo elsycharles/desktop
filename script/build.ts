@@ -233,19 +233,22 @@ async function packageApp() {
         entitlements: entitlementsPath,
       }),
       type: isPublishableBuild ? 'distribution' : 'development',
-      // For development, we will use '-' as the identifier so that codesign
-      // will sign the app to run locally. We need to disable 'identity-validation'
+      // For builds that aren't published by GitHub (development, fork…), we
+      // will use '-' as the identifier so that codesign will sign the app to
+      // run locally (ad-hoc signature). We need to disable 'identity-validation'
       // or otherwise it will replace '-' with one of the regular codesigning
       // identities in our system.
-      identity: isDevelopmentBuild ? '-' : undefined,
-      identityValidation: !isDevelopmentBuild,
+      identity: isPublishableBuild ? undefined : '-',
+      identityValidation: isPublishableBuild,
     },
     osxNotarize,
     protocols: [
       {
         name: getBundleID(),
         schemes: [
-          !isDevelopmentBuild
+          // Builds without GitHub's OAuth app credentials use the development
+          // OAuth app, which redirects to the dev scheme (see __DEV_SECRETS__).
+          !isDevelopmentBuild && process.env.DESKTOP_OAUTH_CLIENT_SECRET
             ? 'x-github-desktop-auth'
             : 'x-github-desktop-dev-auth',
           'x-github-client',
