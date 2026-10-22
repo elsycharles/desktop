@@ -1,7 +1,4 @@
-/* eslint-disable no-sync */
-
 import * as path from 'path'
-import * as cp from 'child_process'
 import { promisify } from 'util'
 
 import glob = require('glob')
@@ -9,15 +6,19 @@ const globPromise = promisify(glob)
 
 import { getDistPath, getDistRoot } from './dist-info'
 
+// electron-builder's type declarations don't compile with this project's
+// settings, so it's loaded without them (like the deb and rpm installers).
+const { Arch, build, Platform } = require('electron-builder')
+
 function getArchitecture() {
   const arch = process.env.npm_config_arch || process.arch
   switch (arch) {
     case 'arm64':
-      return '--arm64'
+      return Arch.arm64
     case 'arm':
-      return '--armv7l'
+      return Arch.armv7l
     default:
-      return '--x64'
+      return Arch.x64
   }
 }
 
@@ -25,30 +26,16 @@ export async function packageElectronBuilder(): Promise<Array<string>> {
   const distPath = getDistPath()
   const distRoot = getDistRoot()
 
-  const electronBuilder = path.resolve(
-    __dirname,
-    '..',
-    'node_modules',
-    '.bin',
-    'electron-builder'
-  )
-
   const configPath = path.resolve(__dirname, 'electron-builder-linux.yml')
 
-  const args = [
-    'build',
-    '--prepackaged',
-    distPath,
-    getArchitecture(),
-    '--config',
-    configPath,
-  ]
-
-  const { error } = cp.spawnSync(electronBuilder, args, { stdio: 'inherit' })
-
-  if (error != null) {
-    return Promise.reject(error)
-  }
+  // Use the API rather than the CLI: it reports failures instead of only
+  // exiting with an error code, and doesn't depend on the CLI's yargs (which
+  // breaks with the string-width version Yarn hoists in this project).
+  await build({
+    prepackaged: distPath,
+    targets: Platform.LINUX.createTarget('AppImage', getArchitecture()),
+    config: configPath,
+  })
 
   const appImageInstaller = `${distRoot}/GitHubDesktop-linux-*.AppImage`
 
