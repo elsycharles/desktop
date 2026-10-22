@@ -18,6 +18,13 @@ on:
         description: The tag to release (it must already exist)
         required: true
         type: string
+      dry-run:
+        description: >-
+          Only build macOS and Windows from the given tag or branch, without
+          publishing anything
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -95,6 +102,7 @@ jobs:
 
   linux:
     name: Linux
+    if: ${{ !inputs.dry-run }}
     uses: ./.github/workflows/ci-linux.yml
     with:
       ref: development-linux
@@ -102,6 +110,7 @@ jobs:
   publish:
     name: Publish the release
     needs: [build, linux]
+    if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
