@@ -1,15 +1,21 @@
 name: Sync development-linux
 
 # Keeps development-linux up to date with development (upstream GitHub Desktop
-# and Smart Split) and with the Linux patches of shiftkey/desktop.
+# and Smart Split) and with the Linux patches of shiftkey/desktop, then
+# releases the update for macOS, Windows and Linux.
 #
 # Scheduled workflows only run from the default branch, which is why this file
 # lives on development even though it updates development-linux.
 
 on:
+  # After the nightly upstream sync
   workflow_run:
     workflows: [Sync upstream development]
     types: [completed]
+  # After your own pushes to development
+  push:
+    branches:
+      - development
   schedule:
     - cron: '47 3 * * *'
   workflow_dispatch:
@@ -36,8 +42,8 @@ jobs:
         shiftkey/desktop linux
     secrets: inherit
 
-  build:
-    name: Build the updated branch
+  release:
+    name: Release the update
     needs: sync
     if: needs.sync.outputs.updated == 'true'
     runs-on: ubuntu-latest
@@ -45,10 +51,11 @@ jobs:
       actions: write
     steps:
       # Pushes made with GITHUB_TOKEN don't trigger other workflows, so start
-      # the Linux CI explicitly to check the synced branch.
-      - name: Start CI / Linux
+      # the release explicitly. It builds and tests every platform and only
+      # publishes when everything passes.
+      - name: Start the release
         env:
           GH_TOKEN: ${{ github.token }}
         run:
-          gh workflow run ci-linux.yml --repo "$GITHUB_REPOSITORY" --ref
-          development-linux
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref
+          development
