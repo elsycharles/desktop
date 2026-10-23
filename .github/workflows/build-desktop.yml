@@ -1,0 +1,105 @@
+name: Build macOS and Windows
+
+# Reusable workflow building, testing and packaging the app for macOS and
+# Windows (x64 and arm64) on GitHub's free runners. Used by the CI and the
+# release workflows.
+#
+# The builds use the 'fork' release channel: they aren't signed with GitHub's
+# certificates, use the development OAuth app and never update automatically.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The branch, tag or SHA to build
+        required: true
+        type: string
+      name:
+        description: Name used in the installer file names (e.g. the tag)
+        required: true
+        type: string
+      upload:
+        description: Whether to upload the installers as artifacts
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_CHANNEL: fork
+  NAME: ${{ inputs.name }}
+
+jobs:
+  build:
+    name: ${{ matrix.friendlyName }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            friendlyName: macOS
+            arch: arm64
+            test: true
+          - os: macos-14
+            friendlyName: macOS
+            arch: x64
+          - os: windows-2022
+            friendlyName: Windows
+            arch: x64
+            test: true
+          - os: windows-2022
+            friendlyName: Windows
+            arch: arm64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+      - name: Read Node.js version
+        id: node
+        shell: bash
+        run: echo "version=$(sed 's/^v//' .nvmrc)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-ci-environment
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          arch: ${{ matrix.arch }}
+      - name: Build production app
+        run: yarn build:prod
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+          TARGET_ARCH: ${{ matrix.arch }}
+      # Tests can only run on the runner's own architecture
+      - name: Run unit tests
+        if: matrix.test
+        run: |
+          yarn test:setup
+          yarn test:unit
+      - name: Run script tests
+        if: matrix.test
+        run: yarn test:script
+      - name: Package production app
+        run: yarn package
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+      - name: Collect installers
+        if: inputs.upload
+        shell: bash
+        run: |
+          mkdir release
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "dist/GitHub Desktop-${{ matrix.arch }}.zip" "release/GitHubDesktop-${NAME}-macOS-${{ matrix.arch }}.zip"
+          else
+            cp "dist/GitHubDesktopSetup-${{ matrix.arch }}.exe" "release/GitHubDesktopSetup-${NAME}-${{ matrix.arch }}.exe"
+            cp "dist/GitHubDesktopSetup-${{ matrix.arch }}.msi" "release/GitHubDesktopSetup-${NAME}-${{ matrix.arch }}.msi"
+          fi
+          ls -la release
+      - uses: actions/upload-artifact@v7
+        if: inputs.upload
+        with:
+          name: release-${{ matrix.friendlyName }}-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error

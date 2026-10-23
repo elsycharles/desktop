@@ -1,0 +1,42 @@
+name: CI / macOS & Windows
+
+# Lints, builds, tests and packages development for macOS and Windows on
+# GitHub's free runners, for pull requests and on demand. It replaces upstream's
+# CI workflow (ci.yml), which is disabled in this fork because it needs GitHub's
+# paid runners and secrets. Every update of development is also built and
+# tested by the Release workflow before being published.
+
+on:
+  pull_request:
+    branches:
+      - development
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+      - run: yarn
+      - run: yarn lint
+
+  build:
+    name: Build
+    uses: ./.github/workflows/build-desktop.yml
+    with:
+      ref: ${{ github.sha }}
+      name: ci
