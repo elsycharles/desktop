@@ -1,0 +1,98 @@
+name: Watch upstream releases
+
+# Starts a release of this fork when an upstream project publishes a new one:
+#
+# - desktop/desktop (betas included) → macOS & Windows release, as soon as
+#   development contains it (the hourly sync merges it), tagged
+#   v<version>-smartsplit
+# - shiftkey/desktop → Linux release
+#
+# GitHub doesn't notify forks about upstream releases, so this checks hourly.
+
+on:
+  schedule:
+    - cron: '37 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: watch-upstream-releases
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check for new upstream releases
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: development
+          fetch-depth: 0
+
+      # A release takes about 30 minutes: don't start the same one again
+      - name: Check that no release is running
+        id: idle
+        run: |
+          running=$(gh run list -R "$GITHUB_REPOSITORY" --workflow release.yml \
+            --limit 20 --json status \
+            --jq '[.[] | select(.status != "completed")] | length')
+          if [ "$running" != "0" ]; then
+            echo "A release is already running, checking again next hour."
+          fi
+          echo "idle=$([ "$running" = "0" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: desktop/desktop → macOS & Windows
+        if: steps.idle.outputs.idle == 'true'
+        run: |
+          set -euo pipefail
+          upstream_tag=$(gh release list -R desktop/desktop --limit 1 \
+            --json tagName --jq '.[0].tagName')
+          version="${upstream_tag#release-}"
+          tag="v${version}-smartsplit"
+          echo "Latest desktop/desktop release: ${upstream_tag}"
+
+          # Already released (manual re-releases add a .N suffix)
+          released=$(gh release list -R "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName --jq '.[].tagName' |
+            grep -E "^${tag//./\\.}(\\.[0-9]+)?$" || true)
+          if [ -n "$released" ]; then
+            echo "Already released as: ${released//$'\n'/, }"
+            exit 0
+          fi
+
+          # Wait until the hourly sync has merged the release into development
+          git fetch --no-tags https://github.com/desktop/desktop.git \
+            "refs/tags/${upstream_tag}:refs/tags/upstream-${upstream_tag}"
+          if ! git merge-base --is-ancestor "upstream-${upstream_tag}" HEAD; then
+            echo "development doesn't contain ${upstream_tag} yet, waiting for the sync."
+            exit 0
+          fi
+
+          echo "Starting the macOS & Windows release ${tag}"
+          gh workflow run release.yml -R "$GITHUB_REPOSITORY" --ref development \
+            -f tag="$tag" -f platforms=macos-windows \
+            -f source="desktop/desktop ${upstream_tag}"
+
+      - name: shiftkey/desktop → Linux
+        if: steps.idle.outputs.idle == 'true'
+        run: |
+          set -euo pipefail
+          upstream_tag=$(gh release list -R shiftkey/desktop --limit 1 \
+            --json tagName --jq '.[0].tagName')
+          source="shiftkey/desktop ${upstream_tag}"
+          echo "Latest shiftkey/desktop release: ${upstream_tag}"
+
+          # Linux releases name the shiftkey release they're based on
+          if gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[].body' | grep -qF "Based on ${source}."; then
+            echo "Already released."
+            exit 0
+          fi
+
+          echo "Starting the Linux release"
+          gh workflow run release.yml -R "$GITHUB_REPOSITORY" --ref development \
+            -f platforms=linux -f source="$source"

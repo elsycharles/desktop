@@ -1,16 +1,16 @@
 name: Release
 
-# Builds GitHub Desktop with Smart Split for macOS, Windows and Linux and
-# publishes the installers in a GitHub release.
+# Builds GitHub Desktop with Smart Split and publishes the installers in a
+# GitHub release.
 #
-# - Automatic releases: after each update of development (and of
-#   development-linux), the "Sync development-linux" workflow starts this one
-#   without a tag, and a new version is released as v<version>-smartsplit.<run>.
-# - Manual releases: push a v* tag, or start this workflow with a tag.
+# - macOS & Windows releases follow desktop/desktop's releases and Linux
+#   releases follow shiftkey/desktop's releases: the "Watch upstream releases"
+#   workflow starts this one when either publishes a new version.
+# - Manual releases: push a v* tag (every platform), or start this workflow.
 #
-# macOS and Windows are built from development (or the tag), Linux from the
-# development-linux branch, which contains development plus the Linux patches.
-# Nothing is published unless every build and test passes.
+# macOS and Windows are built from development, Linux from development-linux
+# (development plus the Linux patches of shiftkey/desktop). Nothing is
+# published unless every build and test passes.
 
 on:
   push:
@@ -20,8 +20,24 @@ on:
     inputs:
       tag:
         description: >-
-          The tag to release. Leave empty to release the current development
-          branch under a new version.
+          The tag of the release. An existing tag is built as is; a new one is
+          created on the built commit. Leave empty for a new version number.
+        required: false
+        default: ''
+        type: string
+      platforms:
+        description: The platforms to build and release
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - macos-windows
+          - linux
+      source:
+        description: >-
+          The upstream release this one is based on, written in the release
+          notes (set by the "Watch upstream releases" workflow)
         required: false
         default: ''
         type: string
@@ -44,43 +60,88 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.release.outputs.tag }}
+      title: ${{ steps.release.outputs.title }}
       sha: ${{ steps.release.outputs.sha }}
       linux-sha: ${{ steps.release.outputs.linux-sha }}
+      target: ${{ steps.release.outputs.target }}
       new-tag: ${{ steps.release.outputs.new-tag }}
+      desktop: ${{ steps.release.outputs.desktop }}
+      linux: ${{ steps.release.outputs.linux }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
       - name: Choose the version and commits to release
         id: release
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          PLATFORMS: ${{ inputs.platforms || 'all' }}
         run: |
+          set -euo pipefail
+          git fetch --no-tags origin development development-linux
+
+          # Which commits to build: an existing tag is built as is, otherwise
+          # the current branches
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             tag="$GITHUB_REF_NAME"
-            new_tag=false
-          elif [ -n "$INPUT_TAG" ]; then
-            tag="$INPUT_TAG"
-            new_tag=false
           else
-            version=$(node -p "require('./app/package.json').version")
-            tag="v${version}-smartsplit.${GITHUB_RUN_NUMBER}"
-            new_tag=true
+            tag="$INPUT_TAG"
           fi
 
-          # Build exactly these commits, even if the branches move meanwhile
-          git fetch --no-tags origin development-linux
+          if [ -n "$tag" ] && git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            new_tag=false
+            sha=$(git rev-parse "$tag^{commit}")
+            linux_sha=$(git rev-parse origin/development-linux)
+          else
+            new_tag=true
+            sha=$(git rev-parse origin/development)
+            linux_sha=$(git rev-parse origin/development-linux)
+          fi
+
+          desktop=false
+          linux=false
+          case "$PLATFORMS" in
+            macos-windows) desktop=true ;;
+            linux) linux=true ;;
+            *) desktop=true; linux=true ;;
+          esac
+
+          # A Linux-only release is tagged on the Linux branch
+          if [ "$desktop" = "true" ]; then
+            target="$sha"
+            version=$(git show "$sha:app/package.json" | node -p "JSON.parse(require('fs').readFileSync(0)).version")
+          else
+            target="$linux_sha"
+            version=$(git show "$linux_sha:app/package.json" | node -p "JSON.parse(require('fs').readFileSync(0)).version")
+          fi
+
+          if [ -z "$tag" ]; then
+            suffix=$([ "$PLATFORMS" = "linux" ] && echo "-linux" || echo "")
+            tag="v${version}${suffix}-smartsplit.${GITHUB_RUN_NUMBER}"
+          fi
+
+          case "$PLATFORMS" in
+            macos-windows) title="GitHub Desktop with Smart Split ${version} (macOS & Windows)" ;;
+            linux) title="GitHub Desktop with Smart Split ${version} (Linux)" ;;
+            *) title="GitHub Desktop with Smart Split ${tag}" ;;
+          esac
+
           {
             echo "tag=$tag"
-            echo "sha=$(git rev-parse HEAD)"
-            echo "linux-sha=$(git rev-parse FETCH_HEAD)"
+            echo "title=$title"
+            echo "sha=$sha"
+            echo "linux-sha=$linux_sha"
+            echo "target=$target"
             echo "new-tag=$new_tag"
+            echo "desktop=$desktop"
+            echo "linux=$linux"
           } >> "$GITHUB_OUTPUT"
-          echo "Releasing $tag from $(git rev-parse --short HEAD), Linux from $(git rev-parse --short FETCH_HEAD)"
+          echo "Releasing $tag ($PLATFORMS): macOS & Windows from ${sha:0:10}, Linux from ${linux_sha:0:10}"
 
   build:
     name: macOS & Windows
     needs: prepare
+    if: needs.prepare.outputs.desktop == 'true'
     uses: ./.github/workflows/build-desktop.yml
     with:
       ref: ${{ needs.prepare.outputs.sha }}
@@ -90,6 +151,7 @@ jobs:
   linux:
     name: Linux
     needs: prepare
+    if: needs.prepare.outputs.linux == 'true'
     uses: ./.github/workflows/ci-linux.yml
     with:
       ref: ${{ needs.prepare.outputs.linux-sha }}
@@ -97,27 +159,36 @@ jobs:
   publish:
     name: Publish the release
     needs: [prepare, build, linux]
-    if: ${{ !inputs.dry-run }}
+    # Skipped platforms are fine, failed ones aren't
+    if: >-
+      !cancelled() && !inputs.dry-run && needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.linux.result == 'success' || needs.linux.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
+      TITLE: ${{ needs.prepare.outputs.title }}
       SHA: ${{ needs.prepare.outputs.sha }}
       LINUX_SHA: ${{ needs.prepare.outputs.linux-sha }}
+      TARGET: ${{ needs.prepare.outputs.target }}
       NEW_TAG: ${{ needs.prepare.outputs.new-tag }}
+      DESKTOP: ${{ needs.prepare.outputs.desktop }}
+      LINUX: ${{ needs.prepare.outputs.linux }}
+      SOURCE: ${{ inputs.source }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ needs.prepare.outputs.target }}
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
       - name: Collect installers
         run: |
+          shopt -s nullglob
           mkdir release
-          cp artifacts/release-*/* release/
-          for file in artifacts/Linux-*/*; do
+          for file in artifacts/release-*/* artifacts/Linux-*/*; do
             cp "$file" "release/$(basename "$file")"
           done
           (cd release && sha256sum -- * > SHA256SUMS.txt)
@@ -125,11 +196,20 @@ jobs:
       - name: Write release notes
         run: |
           version=$(node -p "require('./app/package.json').version")
-          cat > notes.md <<EOF
-          GitHub Desktop ${version} with **Smart Split** (AI-powered commit splitting with Copilot).
-
-          - macOS and Windows are built from ${SHA:0:10}
-          - Linux is built from ${LINUX_SHA:0:10} (\`development-linux\`)
+          {
+            echo "GitHub Desktop ${version} with **Smart Split** (AI-powered commit splitting with Copilot)."
+            echo
+            if [ -n "$SOURCE" ]; then
+              echo "Based on ${SOURCE}."
+              echo
+            fi
+            if [ "$DESKTOP" = "true" ]; then
+              echo "- macOS and Windows are built from ${SHA:0:10} (\`development\`)"
+            fi
+            if [ "$LINUX" = "true" ]; then
+              echo "- Linux is built from ${LINUX_SHA:0:10} (\`development-linux\`)"
+            fi
+            cat <<'EOF'
 
           ## Installation
 
@@ -137,27 +217,29 @@ jobs:
           automatically: new versions are published on this releases page.
 
           - **macOS**: unzip, move *GitHub Desktop* to Applications, then run
-            \`xattr -dr com.apple.quarantine "/Applications/GitHub Desktop.app"\`
+            `xattr -dr com.apple.quarantine "/Applications/GitHub Desktop.app"`
             once (otherwise macOS says the app is damaged).
-          - **Windows**: run the \`.exe\`. SmartScreen warns about an unknown
+          - **Windows**: run the `.exe`. SmartScreen warns about an unknown
             publisher: click *More info* → *Run anyway*.
-          - **Linux**: install the \`.deb\` (Debian/Ubuntu) or \`.rpm\`
-            (Fedora/openSUSE), or run the \`.AppImage\` after \`chmod +x\`.
+          - **Linux**: install the `.deb` (Debian/Ubuntu) or `.rpm`
+            (Fedora/openSUSE), or run the `.AppImage` after `chmod +x`.
 
-          The SHA-256 checksums of every file are in \`SHA256SUMS.txt\`.
+          The SHA-256 checksums of every file are in `SHA256SUMS.txt`.
           EOF
+          } > notes.md
+          cat notes.md
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Automatic releases create their tag on the built commit
+          # New tags are created on the built commit
           if [ "$NEW_TAG" = "true" ]; then
-            tag_option=(--target "$SHA")
+            tag_option=(--target "$TARGET")
           else
             tag_option=(--verify-tag)
           fi
 
           gh release create "$TAG" release/* \
-            --title "GitHub Desktop with Smart Split ${TAG}" \
+            --title "$TITLE" \
             --notes-file notes.md \
             "${tag_option[@]}"
