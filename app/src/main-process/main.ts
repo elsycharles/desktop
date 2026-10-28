@@ -391,6 +391,38 @@ app.on('ready', () => {
     imageTokenResolver.acceptResponse(event.sender, requestId, token)
   })
 
+  // On macOS, replacing the application menu while a contextual menu is open
+  // closes the contextual menu right away. The renderer updates the
+  // application menu as soon as a contextual menu opens (focus moved to the
+  // clicked button…), so wait for the contextual menus to close first.
+  let openContextualMenuCount = 0
+  let pendingApplicationMenu: Menu | null = null
+
+  const setApplicationMenu = (menu: Menu) => {
+    if (openContextualMenuCount > 0) {
+      pendingApplicationMenu = menu
+      return
+    }
+
+    // https://github.com/electron/electron/issues/2717
+    Menu.setApplicationMenu(menu)
+    mainWindow?.sendAppMenu()
+  }
+
+  /** The application menu, including an update waiting to be applied */
+  const getApplicationMenu = () =>
+    pendingApplicationMenu ?? Menu.getApplicationMenu()
+
+  const onContextualMenuClosed = () => {
+    openContextualMenuCount = Math.max(0, openContextualMenuCount - 1)
+
+    if (openContextualMenuCount === 0 && pendingApplicationMenu !== null) {
+      const menu = pendingApplicationMenu
+      pendingApplicationMenu = null
+      setApplicationMenu(menu)
+    }
+  }
+
   ipcMain.on('update-preferred-app-menu-item-labels', (_, labels) => {
     // The current application menu is mutable and we frequently
     // change whether particular items are enabled or not through
@@ -401,19 +433,13 @@ app.on('ready', () => {
     // are.
     const newMenu = buildDefaultMenu(labels)
 
-    const currentMenu = Menu.getApplicationMenu()
+    const currentMenu = getApplicationMenu()
 
     // This shouldn't happen but whenever one says that it does
     // so here's the escape hatch when we can't merge the current
     // menu with the new one; we just use the new one.
     if (currentMenu === null) {
-      // https://github.com/electron/electron/issues/2717
-      Menu.setApplicationMenu(newMenu)
-
-      if (mainWindow !== null) {
-        mainWindow.sendAppMenu()
-      }
-
+      setApplicationMenu(newMenu)
       return
     }
 
@@ -457,9 +483,7 @@ app.on('ready', () => {
     }
 
     if (menuHasChanged && mainWindow) {
-      // https://github.com/electron/electron/issues/2717
-      Menu.setApplicationMenu(newMenu)
-      mainWindow.sendAppMenu()
+      setApplicationMenu(newMenu)
     }
   })
 
@@ -468,7 +492,7 @@ app.on('ready', () => {
    * is executed (ie clicked).
    */
   ipcMain.on('execute-menu-item-by-id', (event, id) => {
-    const currentMenu = Menu.getApplicationMenu()
+    const currentMenu = getApplicationMenu()
 
     if (currentMenu === null) {
       return
@@ -485,7 +509,7 @@ app.on('ready', () => {
   ipcMain.on('update-menu-state', (_, items) => {
     let sendMenuChangedEvent = false
 
-    const currentMenu = Menu.getApplicationMenu()
+    const currentMenu = getApplicationMenu()
 
     if (currentMenu === null) {
       log.debug(`unable to get current menu, bailing out...`)
@@ -511,8 +535,7 @@ app.on('ready', () => {
     }
 
     if (sendMenuChangedEvent && mainWindow) {
-      Menu.setApplicationMenu(currentMenu)
-      mainWindow.sendAppMenu()
+      setApplicationMenu(currentMenu)
     }
   })
 
@@ -538,7 +561,14 @@ app.on('ready', () => {
         spellCheckMenuItems
       )
 
-      menu.popup({ window, callback: () => resolve(null) })
+      openContextualMenuCount++
+      menu.popup({
+        window,
+        callback: () => {
+          onContextualMenuClosed()
+          resolve(null)
+        },
+      })
     })
   })
 
