@@ -45,6 +45,7 @@ import {
   isAppRunningUnderARM64Translation,
 } from '../lib/get-architecture'
 import { buildSpellCheckMenu } from './menu/build-spell-check-menu'
+import { getContextualMenuPosition } from './menu/get-contextual-menu-position'
 import { getMainGUID, saveGUIDFile } from '../lib/get-main-guid'
 import {
   readTitleBarConfigFileSync,
@@ -564,6 +565,7 @@ app.on('ready', () => {
       openContextualMenuCount++
       menu.popup({
         window,
+        ...getContextualMenuPosition(menu, window),
         callback: () => {
           onContextualMenuClosed()
           resolve(null)
