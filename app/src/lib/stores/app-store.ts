@@ -2990,8 +2990,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
   ): Promise<IStatusResult | null> {
     const gitStore = this.gitStoreCache.get(repository)
     const status = await gitStore.loadStatus()
+    this.updateSidebarIndicator(repository, status)
 
     if (status === null) {
+      this.emitUpdate()
       return null
     }
 
@@ -4108,7 +4110,6 @@ export class AppStore extends TypedBaseStore<IAppState> {
     // is in a bad state - let's mark it as missing here and give up on the
     // further work
     const status = await this._loadStatus(repository)
-    this.updateSidebarIndicator(repository, status)
 
     if (status === null) {
       await this._updateRepositoryMissing(repository, true)
@@ -4182,10 +4183,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
   /**
    * Update the repository sidebar indicator for the repository
    */
-  private async updateSidebarIndicator(
+  private updateSidebarIndicator(
     repository: Repository,
     status: IStatusResult | null
-  ): Promise<void> {
+  ): void {
     const lookup = this.localRepositoryStateLookup
 
     if (repository.missing) {
