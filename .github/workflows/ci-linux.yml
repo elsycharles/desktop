@@ -77,10 +77,19 @@ jobs:
         env:
           npm_config_arch: ${{ matrix.arch }}
           TARGET_ARCH: ${{ matrix.arch }}
+      # Like upstream, which runs the unit tests on a single architecture per
+      # platform, they only run on x64: the code under test is the same on
+      # arm64, which is still built and packaged.
       - name: Prepare testing environment
+        if: matrix.arch == 'x64'
         run: yarn test:setup
+      # A test that hangs fails after two minutes with its name in the log,
+      # rather than silently running into the job's timeout, and a test file
+      # leaving handles open can't keep the run from finishing.
       - name: Run unit tests
-        run: xvfb-run -a yarn test:unit
+        if: matrix.arch == 'x64'
+        timeout-minutes: 30
+        run: xvfb-run -a yarn test:unit --test-timeout=120000 --test-force-exit
       - name: Package production app
         run: yarn package
         env:
