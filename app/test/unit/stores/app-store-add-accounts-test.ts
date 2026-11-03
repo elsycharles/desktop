@@ -3,6 +3,7 @@ import { after, before, describe, it, mock, TestContext } from 'node:test'
 import { setImmediate } from 'node:timers/promises'
 import * as Path from 'path'
 import { existsSync } from 'fs'
+import { realpath } from 'fs/promises'
 import type { AppStore } from '../../../src/lib/stores/app-store'
 import { API, IAPIPullRequest } from '../../../src/lib/api'
 import { Account } from '../../../src/models/account'
@@ -471,7 +472,14 @@ describe('AppStore explicitly adding repositories', () => {
         await makeCommit(main, {
           entries: [{ path: 'README.md', contents: 'Hello' }],
         })
-        const worktreePath = Path.join(await createTempDirectory(t), 'wt')
+        // Git reports worktree paths with symlinks resolved (on macOS the
+        // temporary directory is under /var, a symlink to /private/var), so
+        // the worktree is added at its real path for it to be found the same
+        // way on every platform.
+        const worktreePath = Path.join(
+          await realpath(await createTempDirectory(t)),
+          'wt'
+        )
         await addWorktree(main, worktreePath, { createBranch: 'wt' })
         const added = await stores.repositoriesStore.addRepository(
           worktreePath,
@@ -496,9 +504,12 @@ describe('AppStore explicitly adding repositories', () => {
       })
 
       it('uses the current account after switching back to a worktree', async t => {
-        const { main } = await setupWorktree(t)
+        const { added: worktreeRepository, main } = await setupWorktree(t)
+        // The worktree is reached by switching from the main repository, so it
+        // must not also be a repository of its own: switching would select
+        // that one instead.
+        await stores.repositoriesStore.removeRepository(worktreeRepository)
         const { listWorktrees } = await import('../../../src/lib/git/worktree')
-        const { realpath } = await import('fs/promises')
         const mainPath = await realpath(main.path)
         const worktrees = await listWorktrees(main)
         const mainEntry = worktrees.find(wt => wt.type === 'main')
