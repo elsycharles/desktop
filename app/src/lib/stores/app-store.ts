@@ -8873,7 +8873,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
     if (pathsToStage.length > 0) {
       await git(
-        ['add', '--', ...pathsToStage],
+        ['--literal-pathspecs', 'add', '--', ...pathsToStage],
         repository.path,
         'copilotConflictResolution'
       )

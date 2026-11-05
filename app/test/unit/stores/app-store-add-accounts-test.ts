@@ -3,7 +3,9 @@ import { after, before, describe, it, mock, TestContext } from 'node:test'
 import { setImmediate } from 'node:timers/promises'
 import * as Path from 'path'
 import { existsSync } from 'fs'
-import { realpath } from 'fs/promises'
+import { readFile, writeFile } from 'fs/promises'
+import { exec } from 'dugite'
+import { MultiCommitOperationKind } from '../../../src/models/multi-commit-operation'
 import type { AppStore } from '../../../src/lib/stores/app-store'
 import { API, IAPIPullRequest } from '../../../src/lib/api'
 import { Account } from '../../../src/models/account'
@@ -125,6 +127,67 @@ describe('AppStore explicitly adding repositories', () => {
     await addRemote(repository, 'origin', apiRepository.clone_url)
     return repository
   }
+
+  it(
+    'stages only literal filenames when applying Copilot conflict resolutions',
+    { skip: process.platform === 'win32' },
+    async t => {
+      const {
+        setupConflictedRepoWithPathspecMagicFile,
+        PathspecMagicFileName,
+      } = await import('../../helpers/repositories')
+      const repository = await setupConflictedRepoWithPathspecMagicFile(t)
+      await writeFile(
+        Path.join(repository.path, 'unintended.txt'),
+        'untracked\n'
+      )
+      appStore._initializeMultiCommitOperation(
+        repository,
+        {
+          kind: MultiCommitOperationKind.Merge,
+          sourceBranch: null,
+          isSquash: false,
+        },
+        null,
+        [],
+        null,
+        false
+      )
+      stores.repositoryStateCache.updateMultiCommitOperationState(
+        repository,
+        () => ({
+          copilotResolutions: [
+            {
+              path: PathspecMagicFileName,
+              resolvedContent: 'resolved\n',
+              reasoning: 'Combine both versions',
+            },
+          ],
+        })
+      )
+
+      await appStore._applyCopilotConflictResolutions(repository)
+
+      const staged = await exec(
+        ['diff', '--cached', '--name-only', '-z'],
+        repository.path
+      )
+      assert.deepEqual(staged.stdout.split('\0').filter(Boolean), [
+        PathspecMagicFileName,
+      ])
+      assert.equal(
+        await readFile(
+          Path.join(repository.path, PathspecMagicFileName),
+          'utf8'
+        ),
+        'resolved\n'
+      )
+      assert.equal(
+        await readFile(Path.join(repository.path, 'unintended.txt'), 'utf8'),
+        'untracked\n'
+      )
+    }
+  )
 
   describe('preserving repository state across account changes', () => {
     async function setupDraft(t: TestContext) {
@@ -472,14 +535,7 @@ describe('AppStore explicitly adding repositories', () => {
         await makeCommit(main, {
           entries: [{ path: 'README.md', contents: 'Hello' }],
         })
-        // Git reports worktree paths with symlinks resolved (on macOS the
-        // temporary directory is under /var, a symlink to /private/var), so
-        // the worktree is added at its real path for it to be found the same
-        // way on every platform.
-        const worktreePath = Path.join(
-          await realpath(await createTempDirectory(t)),
-          'wt'
-        )
+        const worktreePath = Path.join(await createTempDirectory(t), 'wt')
         await addWorktree(main, worktreePath, { createBranch: 'wt' })
         const added = await stores.repositoriesStore.addRepository(
           worktreePath,
@@ -504,12 +560,9 @@ describe('AppStore explicitly adding repositories', () => {
       })
 
       it('uses the current account after switching back to a worktree', async t => {
-        const { added: worktreeRepository, main } = await setupWorktree(t)
-        // The worktree is reached by switching from the main repository, so it
-        // must not also be a repository of its own: switching would select
-        // that one instead.
-        await stores.repositoriesStore.removeRepository(worktreeRepository)
+        const { main } = await setupWorktree(t)
         const { listWorktrees } = await import('../../../src/lib/git/worktree')
+        const { realpath } = await import('fs/promises')
         const mainPath = await realpath(main.path)
         const worktrees = await listWorktrees(main)
         const mainEntry = worktrees.find(wt => wt.type === 'main')
