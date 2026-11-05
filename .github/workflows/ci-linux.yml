@@ -83,13 +83,21 @@ jobs:
       - name: Prepare testing environment
         if: matrix.arch == 'x64'
         run: yarn test:setup
-      # A test that hangs fails after two minutes with its name in the log,
-      # rather than silently running into the job's timeout, and a test file
-      # leaving handles open can't keep the run from finishing.
+      # This fork's scripts come from this workflow's commit: a release builds
+      # development-linux with development's workflow, and development-linux
+      # may not have the latest scripts yet
+      - name: Get this fork's scripts
+        if: matrix.arch == 'x64'
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/fork"
+          git archive "$GITHUB_SHA" .github/fork | tar -x -C "$RUNNER_TEMP/fork"
+      # With a time limit per test, and the upstream tests that can't pass on
+      # Linux skipped: see the script
       - name: Run unit tests
         if: matrix.arch == 'x64'
         timeout-minutes: 30
-        run: xvfb-run -a yarn test:unit --test-timeout=120000 --test-force-exit
+        run: bash "$RUNNER_TEMP/fork/.github/fork/unit-tests.sh"
       - name: Package production app
         run: yarn package
         env:

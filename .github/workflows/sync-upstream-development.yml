@@ -1,10 +1,20 @@
 name: Sync upstream development
 
+# Merges desktop/desktop's development into this fork's every hour. See
+# sync-branch.yml for how conflicts and failures are handled: the merge is
+# checked on macOS, the platform upstream tests on.
+
 on:
   schedule:
     # Every hour: GitHub doesn't notify forks about upstream changes
     - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      retry:
+        description: Try again even if this same attempt was already reported
+        required: false
+        default: false
+        type: boolean
 
 # Never run two syncs of the same branch at the same time
 concurrency:
@@ -12,13 +22,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Upstream's workflows come with its code, but most of them only make sense
+  # in desktop/desktop: issue and pull request triage, its release process…
+  # Those identical to upstream's are disabled, including the ones upstream
+  # adds later. The ones this fork wrote or changed, and those listed in KEEP,
+  # stay enabled.
+  disable-upstream-workflows:
+    name: Disable upstream's own workflows
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KEEP: codeql.yml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: development
+
+      - name: Disable them
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 https://github.com/desktop/desktop.git development
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows?per_page=100" \
+            --jq '.workflows[] | select(.state == "active") | [.id, .path] | @tsv' |
+          while IFS=$'\t' read -r id path; do
+            if [[ " $KEEP " == *" ${path##*/} "* ]]; then
+              continue
+            fi
+            ours=$(git rev-parse -q --verify "HEAD:$path" || true)
+            upstream=$(git rev-parse -q --verify "FETCH_HEAD:$path" || true)
+            if [ -n "$ours" ] && [ "$ours" = "$upstream" ]; then
+              echo "Disabling $path"
+              gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/$id/disable"
+            fi
+          done
+
   sync:
     name: Merge upstream development
+    needs: disable-upstream-workflows
+    # Disabling workflows is housekeeping: the sync runs whatever happened
+    if: ${{ !cancelled() }}
     permissions:
       contents: write
-      issues: write
+      pull-requests: write
     uses: ./.github/workflows/sync-branch.yml
     with:
       target-branch: development
       sources: desktop/desktop development
+      check-runner: macos-14
+      retry: ${{ inputs.retry || false }}
     secrets: inherit

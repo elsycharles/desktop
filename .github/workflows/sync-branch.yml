@@ -1,13 +1,34 @@
 name: Sync branch
 
 # Reusable workflow merging one or more source branches into a branch of this
-# repository and pushing the result. On a merge conflict nothing is pushed: the
-# conflicting files are listed in the job summary and in an issue.
+# repository, checking the result, then pushing it.
+#
+# 1. Merge: each source is merged in turn. The conflicts that don't need a
+#    person are resolved by .github/fork/resolve-conflicts.mjs: yarn.lock
+#    files are merged by yarn, and where both sides only added lines, both
+#    additions are kept.
+# 2. Check: the merged code must install, pass the lint and the type check,
+#    and pass the unit tests on the given runner. Git can cleanly merge code
+#    that no longer works together, when upstream changes a function Smart
+#    Split uses for instance: such a merge is never pushed.
+# 3. Publish: the checked merge is pushed. When a person is needed instead (a
+#    conflict that can't be resolved mechanically, or a failed check), it goes
+#    to the sync/<branch> branch with a pull request saying what to do, and the
+#    run still succeeds. An attempt is only made once: later runs try again
+#    when the branch or a source changes, keep the pull request up to date
+#    until someone pushes to it, and close it once it isn't needed anymore.
+#
+# The steps are in .github/fork/sync.mjs, taken from this workflow's commit:
+# the branch being updated may not have them yet.
 #
 # GITHUB_TOKEN can't push commits that change files in .github/workflows, which
-# upstream merges regularly do. Add a SYNC_TOKEN secret (a fine-grained personal
+# upstream merges regularly do: the SYNC_TOKEN secret, a fine-grained personal
 # access token for this repository with read and write access to "Contents" and
-# "Workflows") so that these merges can be pushed too.
+# "Workflows", is used to push. Pull requests are opened with GITHUB_TOKEN,
+# which needs "Allow GitHub Actions to create and approve pull requests" in the
+# repository's Actions settings, or else with SYNC_TOKEN, which then needs read
+# and write access to "Pull requests" too. If neither can, the run fails once,
+# with the details in its summary.
 
 on:
   workflow_call:
@@ -22,6 +43,15 @@ on:
           <branch>"
         required: true
         type: string
+      check-runner:
+        description: The runner the merged code is checked on
+        required: true
+        type: string
+      retry:
+        description: Try again even if this same attempt was already reported
+        required: false
+        default: false
+        type: boolean
     outputs:
       updated:
         description: Whether new commits were pushed to the target branch
@@ -33,13 +63,18 @@ on:
 jobs:
   sync:
     name: Merge into ${{ inputs.target-branch }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.check-runner }}
+    timeout-minutes: 90
     outputs:
-      updated: ${{ steps.push.outputs.updated }}
+      updated: ${{ steps.publish.outputs.updated }}
     env:
       TARGET_BRANCH: ${{ inputs.target-branch }}
+      SYNC_BRANCH: sync/${{ inputs.target-branch }}
+      SOURCES: ${{ inputs.sources }}
+      # Like the CI: unsigned builds of this fork
+      RELEASE_CHANNEL: fork
     steps:
-      - name: Check out target branch
+      - name: Check out ${{ inputs.target-branch }}
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.target-branch }}
@@ -51,92 +86,132 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge source branches
+      - name: Get the sync scripts
+        run: |
+          git cat-file -e "$GITHUB_SHA^{commit}" 2>/dev/null ||
+            git fetch --no-tags origin "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/fork"
+          git archive "$GITHUB_SHA" .github/fork | tar -x -C "$RUNNER_TEMP/fork"
+          echo "FORK_SCRIPTS=$RUNNER_TEMP/fork/.github/fork" >> "$GITHUB_ENV"
+
+      # For the scripts, and for yarn when it merges lockfiles
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Merge the source branches
         id: merge
+        run: node "$FORK_SCRIPTS/sync.mjs" merge
+
+      - name: Look for an earlier report of this attempt
+        id: reported
+        if: >-
+          !inputs.retry && (steps.merge.outputs.merged == 'true' ||
+          steps.merge.outputs.conflict == 'true')
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/sync-reported
+          key: ${{ steps.merge.outputs.report-key }}
+          lookup-only: true
+
+      - name: Decide whether to check the merge
+        id: plan
         env:
-          SOURCES: ${{ inputs.sources }}
+          MERGED: ${{ steps.merge.outputs.merged }}
+          REPORTED: ${{ steps.reported.outputs.cache-hit == 'true' }}
         run: |
-          set -euo pipefail
-          before=$(git rev-parse HEAD)
-          echo "before=$before" >> "$GITHUB_OUTPUT"
+          echo "check=$([ "$MERGED" = true ] && [ "$REPORTED" != true ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
-          index=0
-          while read -r repository branch; do
-            if [ -z "$repository" ]; then
-              continue
-            fi
-            index=$((index + 1))
+      # The checks: their failures don't stop the job, the publish step puts
+      # them in the pull request
 
-            # Branches of this repository are fetched with the checkout
-            # credentials, which also works for private repositories.
-            if [ "$repository" = "$GITHUB_REPOSITORY" ]; then
-              remote=origin
-            else
-              remote="source-$index"
-              git remote add "$remote" "https://github.com/${repository}.git"
-            fi
+      - name: Install system dependencies
+        if: steps.plan.outputs.check == 'true' && runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev xvfb
 
-            git fetch --no-tags "$remote" "$branch"
-            echo "Merging ${repository}@${branch}…"
+      - name: Read Node.js version
+        id: node
+        if: steps.plan.outputs.check == 'true'
+        run: |
+          git submodule update --init --recursive
+          echo "version=$(sed 's/^v//' .nvmrc)" >> "$GITHUB_OUTPUT"
 
-            if ! git merge --no-edit -m "Merge ${repository}@${branch} into ${TARGET_BRANCH}" FETCH_HEAD; then
-              {
-                echo "source=${repository}@${branch}"
-                echo "conflicts<<EOF"
-                git diff --name-only --diff-filter=U
-                echo "EOF"
-              } >> "$GITHUB_OUTPUT"
-              git merge --abort
-              echo "::error::Merging ${repository}@${branch} into ${TARGET_BRANCH} conflicts, nothing was pushed."
-              exit 1
-            fi
-          done <<< "$SOURCES"
+      - name: Install the dependencies
+        id: install
+        if: steps.plan.outputs.check == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/setup-ci-environment
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          arch: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
 
-      - name: Push
-        id: push
+      - name: Format the files whose conflicts were resolved
+        if: >-
+          steps.install.outcome == 'success' &&
+          steps.merge.outputs.resolved-files != ''
+        continue-on-error: true
         env:
-          BEFORE: ${{ steps.merge.outputs.before }}
-        run: |
-          if [ "$(git rev-parse HEAD)" = "$BEFORE" ]; then
-            echo "Already up to date."
-            echo "updated=false" >> "$GITHUB_OUTPUT"
-          else
-            git push origin "HEAD:${TARGET_BRANCH}"
-            echo "updated=true" >> "$GITHUB_OUTPUT"
-          fi
+          RESOLVED_FILES: ${{ steps.merge.outputs.resolved-files }}
+        run: node "$FORK_SCRIPTS/sync.mjs" format
 
-      - name: Report merge conflicts
-        if: failure() && steps.merge.outputs.source != ''
+      - name: Lint
+        id: lint
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: yarn lint
+
+      - name: Type check
+        id: typecheck
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: yarn tsc -p tsconfig.json --noEmit
+
+      - name: Unit tests
+        id: tests
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          yarn test:setup
+          # A flaky test shouldn't hold the sync back: they get a second chance
+          bash "$FORK_SCRIPTS/unit-tests.sh" || {
+            echo "::warning::Some unit tests failed: running them again in case they're flaky."
+            bash "$FORK_SCRIPTS/unit-tests.sh"
+          }
+
+      - name: Publish
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE: ${{ steps.merge.outputs.source }}
-          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
-          RUN_URL:
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{
-            github.run_id }}
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          REPORTED: ${{ steps.reported.outputs.cache-hit == 'true' }}
+          CHECKS: >-
+            {
+              "Install the dependencies": "${{ steps.install.outcome }}",
+              "Lint": "${{ steps.lint.outcome }}",
+              "Type check": "${{ steps.typecheck.outcome }}",
+              "Unit tests": "${{ steps.tests.outcome }}"
+            }
+        run: node "$FORK_SCRIPTS/sync.mjs" publish
+
+      # A cache entry is how later runs know: see "Look for an earlier report"
+      - name: Note the run that reported this attempt
+        if: always() && steps.publish.outputs.remember == 'true'
         run: |
-          title="Sync conflict: ${SOURCE} → ${TARGET_BRANCH}"
-          files=$(while read -r file; do echo "- \`${file}\`"; done <<< "$CONFLICTS")
-          body=$(printf '%s\n\n%s\n\n%s\n%s\n\n%s\n\n%s\n' \
-            "Merging \`${SOURCE}\` into \`${TARGET_BRANCH}\` conflicts, so the automatic sync stopped and nothing was pushed." \
-            "Conflicting files:" \
-            "$files" \
-            "" \
-            "Resolve the conflicts locally, push \`${TARGET_BRANCH}\`, then close this issue: the next run will pick up from there." \
-            "Run: ${RUN_URL}")
+          mkdir -p "$RUNNER_TEMP/sync-reported"
+          echo "$GITHUB_RUN_ID" > "$RUNNER_TEMP/sync-reported/run"
 
-          echo "## ${title}" >> "$GITHUB_STEP_SUMMARY"
-          echo "$body" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remember that this attempt was reported
+        if: always() && steps.publish.outputs.remember == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/sync-reported
+          key: ${{ steps.merge.outputs.report-key }}
 
-          # Issues may be disabled (the default for forks): the summary is
-          # enough in that case.
-          existing=$(gh issue list --state open --search "\"${title}\" in:title" \
-            --json number,title --jq ".[] | select(.title == \"${title}\") | .number" \
-            2>/dev/null | head -n 1 || true)
-
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body" || true
-          else
-            gh issue create --title "$title" --body "$body" ||
-              echo "::warning::Couldn't open an issue (are issues enabled for this repository?)"
-          fi
+      - name: Fail if nobody could be told
+        if: steps.publish.outputs.unreported == 'true'
+        run: |
+          echo "::error::A person is needed to finish the sync, but no pull request could be opened: see the summary."
+          exit 1
