@@ -6,6 +6,9 @@ name: Sync development-linux
 #
 # Scheduled workflows only run from the default branch, which is why this file
 # lives on development even though it updates development-linux.
+#
+# See sync-branch.yml for how conflicts and failures are handled: the merge is
+# checked on Linux, like the CI / Linux workflow does.
 
 on:
   # After each upstream sync
@@ -20,6 +23,12 @@ on:
   schedule:
     - cron: '47 3 * * *'
   workflow_dispatch:
+    inputs:
+      retry:
+        description: Try again even if this same attempt was already reported
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: sync-development-linux
@@ -34,11 +43,13 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: write
-      issues: write
+      pull-requests: write
     uses: ./.github/workflows/sync-branch.yml
     with:
       target-branch: development-linux
       sources: |
         ${{ github.repository }} development
         shiftkey/desktop linux
+      check-runner: ubuntu-24.04
+      retry: ${{ inputs.retry || false }}
     secrets: inherit
