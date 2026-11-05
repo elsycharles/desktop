@@ -1502,10 +1502,13 @@ export class CopilotStore extends BaseStore {
       null
 
     try {
-      client = await this.withCancellation(
+      client = await awaitCancellableCopilotOperation(
         () => this.createClient(account, repositoryPath, credentials),
-        signal,
-        lateClient => this.stopClient(lateClient)
+        {
+          signal,
+          cancellationError: () => new CommitMessageGenerationCancelledError(),
+          disposeLateValue: lateClient => this.stopClient(lateClient),
+        }
       )
       throwIfCancelled()
 
@@ -1535,16 +1538,20 @@ export class CopilotStore extends BaseStore {
             kind: 'reject',
           }),
         },
-        signal
+        signal,
+        () => new CommitMessageGenerationCancelledError()
       )
 
       throwIfCancelled()
 
-      const response = await this.sendAndWait(
-        session,
+      const response = await sendCopilotMessageRequest(
+        getCopilotMessageSession(session),
         { prompt: buildSmartSplitUserPrompt(diff, diffTag) },
         timeoutMs ?? SmartSplitRequestTimeoutMs,
-        signal
+        {
+          signal,
+          cancellationError: () => new CommitMessageGenerationCancelledError(),
+        }
       )
 
       throwIfCancelled()
