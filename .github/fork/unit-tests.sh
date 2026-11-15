@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the unit tests the way this fork's workflows do. Arguments are passed on
-# to `yarn test:unit`.
+# to `npm run test:unit`.
 #
 # - A test that hangs fails after two minutes, with its name in the log, rather
 #   than running into the job's timeout; and a test file that leaves handles
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 args=(--test-timeout=120000 --test-force-exit)
-run=(yarn test:unit)
+run=(npm run test:unit --)
 
 if [ "$(uname -s)" = "Linux" ]; then
   # Upstream tests that fail on Linux because of the test itself, not of the

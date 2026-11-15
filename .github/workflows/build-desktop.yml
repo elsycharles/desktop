@@ -39,11 +39,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             friendlyName: macOS
             arch: arm64
             test: true
-          - os: macos-14
+          - os: macos-15
             friendlyName: macOS
             arch: x64
           - os: windows-2022
@@ -68,7 +68,7 @@ jobs:
           node-version: ${{ steps.node.outputs.version }}
           arch: ${{ matrix.arch }}
       - name: Build production app
-        run: yarn build:prod
+        run: npm run build:prod
         env:
           npm_config_arch: ${{ matrix.arch }}
           TARGET_ARCH: ${{ matrix.arch }}
@@ -76,13 +76,13 @@ jobs:
       - name: Run unit tests
         if: matrix.test
         run: |
-          yarn test:setup
-          yarn test:unit
+          npm run test:setup
+          npm run test:unit
       - name: Run script tests
         if: matrix.test
-        run: yarn test:script
+        run: npm run test:script
       - name: Package production app
-        run: yarn package
+        run: npm run package
         env:
           npm_config_arch: ${{ matrix.arch }}
       - name: Collect installers

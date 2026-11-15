@@ -215,10 +215,10 @@ function merge() {
 
   writeState({ before, head, attempt, merged, conflict })
 
-  // Lockfiles are left as yarn wrote them
+  // Lockfiles are left as npm wrote them
   const resolvedFiles = merged
     .flatMap(m => m.resolutions)
-    .filter(r => r.resolved && !r.path.endsWith('yarn.lock'))
+    .filter(r => r.resolved && !r.path.endsWith('package-lock.json'))
     .map(r => r.path)
 
   setOutput('merged', String(head !== before))

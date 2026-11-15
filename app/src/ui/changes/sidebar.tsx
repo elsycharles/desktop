@@ -434,7 +434,7 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
       workingDirectory,
       commitMessage,
       commitMode,
-      pushAfterAssistedCommit,
+      pushAfterCommit,
       assistedCommit,
       assistedCommitAvailable,
       showCoAuthoredBy,
@@ -491,7 +491,7 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
           branch={this.props.branch}
           commitMessage={commitMessage}
           commitMode={commitMode}
-          pushAfterAssistedCommit={pushAfterAssistedCommit}
+          pushAfterCommit={pushAfterCommit}
           assistedCommitState={assistedCommit}
           repositoryMutationBlocked={
             isRepositoryAffectedByAssistedCommit(this.props.repository.path) &&

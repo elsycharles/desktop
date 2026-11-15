@@ -30,9 +30,13 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-          cache: yarn
-      - run: yarn
-      - run: yarn lint
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+            vendor/*/package-lock.json
+      - run: npm ci
+      - run: npm run lint
 
   build:
     name: Build

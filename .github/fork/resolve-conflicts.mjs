@@ -2,8 +2,12 @@
 // Resolves the conflicts of the merge in progress that don't need a person,
 // and stages them:
 //
-// - yarn.lock files are merged by yarn, which combines both versions of the
-//   lockfile and settles the result against the merged package.json.
+// - A file one side didn't change since one of the merge bases takes the
+//   other side's version. Git can report such a conflict when the branches
+//   have several merge bases, as upstream's release branches cause: it then
+//   merges from a combination of them, in which the file conflicts.
+// - package-lock.json files take the incoming version, which npm then
+//   settles against the merged package.json.
 // - A conflict where both sides only added lines at the same place, without
 //   changing or removing any line, keeps both additions: ours, then theirs.
 //   Typically two sets of imports, class members or tests added at the same
@@ -20,9 +24,8 @@
 // Usage: node resolve-conflicts.mjs [--report <file>]
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 
 // Paths are never pathspecs, whatever characters they contain
 const gitEnv = { ...process.env, GIT_LITERAL_PATHSPECS: '1' }
@@ -43,12 +46,56 @@ function unmergedPaths() {
 
 /** The index stages of a conflicted path: 1 base, 2 ours, 3 theirs. */
 function stagesOf(path) {
-  return new Set(
+  return new Map(
     git('ls-files', '--unmerged', '-z', '--', path)
       .split('\0')
       .filter(Boolean)
-      .map(entry => Number(entry.split('\t')[0].split(' ')[2]))
+      .map(entry => {
+        const [mode, object, stage] = entry.split('\t')[0].split(' ')
+        return [Number(stage), { mode, object }]
+      })
   )
+}
+
+/** The commits the merge in progress is based on. */
+function mergeBases() {
+  return git('merge-base', '--all', 'HEAD', 'MERGE_HEAD')
+    .split('\n')
+    .filter(Boolean)
+}
+
+/** The path's object in each merge base that has it. */
+function baseObjects(bases, path) {
+  return new Set(
+    bases
+      .map(base => {
+        try {
+          return git('rev-parse', '-q', '--verify', `${base}:${path}`).trim()
+        } catch {
+          return null
+        }
+      })
+      .filter(Boolean)
+  )
+}
+
+/** Takes one side's version when the other side didn't change the file. */
+function resolveUnchangedSide(path, stages, bases) {
+  const objects = baseObjects(bases, path)
+  for (const [unchanged, side, other] of [
+    [2, 'theirs', 'ours'],
+    [3, 'ours', 'theirs'],
+  ]) {
+    if (objects.has(stages.get(unchanged).object)) {
+      git('checkout', `--${side}`, '--', path)
+      git('add', '--', path)
+      return {
+        resolved: true,
+        how: `took ${side}, as ${other} didn't change it since a merge base`,
+      }
+    }
+  }
+  return null
 }
 
 const Marker = {
@@ -196,60 +243,41 @@ function resolveText(path) {
   }
 }
 
-function runYarn(cwd) {
-  // The packages are installed out of the way, without running their scripts:
-  // only the lockfile is wanted, and the real install must still build them
-  const modules = mkdtempSync(join(tmpdir(), 'resolve-conflicts-'))
-  const args = [
-    'install',
-    '--ignore-scripts',
-    '--non-interactive',
-    '--modules-folder',
-    modules,
-  ]
-  try {
-    // The registry can fail now and then: try again once
-    for (let attempt = 1; ; attempt++) {
-      try {
-        execFileSync('yarn', args, { cwd, stdio: 'inherit' })
-        return
-      } catch (e) {
-        if (attempt === 2) {
-          throw e
-        }
-        console.log('yarn failed, trying again…')
+function runNpm(cwd) {
+  // Only the lockfile is written: no packages are installed, so the real
+  // install still builds them
+  const args = ['install', '--package-lock-only', '--ignore-scripts']
+  // The registry can fail now and then: try again once
+  for (let attempt = 1; ; attempt++) {
+    try {
+      execFileSync('npm', args, { cwd, stdio: 'inherit' })
+      return
+    } catch (e) {
+      if (attempt === 2) {
+        throw e
       }
+      console.log('npm failed, trying again…')
     }
-  } finally {
-    rmSync(modules, { recursive: true, force: true })
   }
 }
 
-/** Merges a yarn.lock with yarn, once the package.json next to it is merged. */
+/**
+ * Settles a package-lock.json with npm, once the package.json next to it is
+ * merged: from the incoming lockfile, whose versions (security updates
+ * included) win, npm adds or removes what the merged package.json needs.
+ */
 function resolveLockfile(path) {
-  const cwd = dirname(path) || '.'
-
-  // yarn reads the two sides of a conflicted lockfile, but only in the
-  // default conflict style
-  git('checkout', '--conflict=merge', '--', path)
+  git('checkout', '--theirs', '--', path)
   try {
-    runYarn(cwd)
+    runNpm(dirname(path) || '.')
   } catch {
-    // yarn couldn't combine them: start from the incoming lockfile instead,
-    // and let yarn bring it in line with the merged package.json
-    try {
-      git('checkout', '--theirs', '--', path)
-      runYarn(cwd)
-    } catch {
-      return { resolved: false, reason: 'yarn could not merge it' }
-    }
-  }
-
-  if (/^(<<<<<<<|=======|>>>>>>>)/m.test(readFileSync(path, 'utf8'))) {
-    return { resolved: false, reason: 'yarn left conflict markers in it' }
+    return { resolved: false, reason: 'npm could not settle it' }
   }
   git('add', '--', path)
-  return { resolved: true, how: 'merged by yarn' }
+  return {
+    resolved: true,
+    how: 'took theirs, then npm settled it against the merged package.json',
+  }
 }
 
 function main() {
@@ -258,17 +286,23 @@ function main() {
 
   const results = []
   const lockfiles = []
+  const bases = mergeBases()
 
   for (const path of unmergedPaths()) {
     const stages = stagesOf(path)
     const bothChanged = stages.has(1) && stages.has(2) && stages.has(3)
+    const unchangedSide = bothChanged
+      ? resolveUnchangedSide(path, stages, bases)
+      : null
 
-    if (!bothChanged) {
+    if (unchangedSide !== null) {
+      results.push({ path, ...unchangedSide })
+    } else if (!bothChanged) {
       const reason = !stages.has(1)
         ? 'added on both sides'
         : 'deleted on one side and changed on the other'
       results.push({ path, resolved: false, reason })
-    } else if (basename(path) === 'yarn.lock') {
+    } else if (basename(path) === 'package-lock.json') {
       lockfiles.push(path)
     } else {
       results.push({ path, ...resolveText(path) })
