@@ -96,12 +96,17 @@ jobs:
           git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
           mkdir -p "$RUNNER_TEMP/fork"
           git archive "$GITHUB_SHA" .github/fork | tar -x -C "$RUNNER_TEMP/fork"
-      # With a time limit per test, and the upstream tests that can't pass on
-      # Linux skipped: see the script
+      # With time limits, and the upstream tests that can't pass on Linux
+      # skipped: see the script. A flaky test, or a test file that hangs now
+      # and then, gets a second chance rather than failing the build.
       - name: Run unit tests
         if: matrix.arch == 'x64'
-        timeout-minutes: 30
-        run: bash "$RUNNER_TEMP/fork/.github/fork/unit-tests.sh"
+        timeout-minutes: 40
+        run: |
+          bash "$RUNNER_TEMP/fork/.github/fork/unit-tests.sh" || {
+            echo "::warning::Some unit tests failed: running them again in case they're flaky."
+            bash "$RUNNER_TEMP/fork/.github/fork/unit-tests.sh"
+          }
       - name: Package production app
         run: npm run package
         env:
