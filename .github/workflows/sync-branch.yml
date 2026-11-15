@@ -4,9 +4,10 @@ name: Sync branch
 # repository, checking the result, then pushing it.
 #
 # 1. Merge: each source is merged in turn. The conflicts that don't need a
-#    person are resolved by .github/fork/resolve-conflicts.mjs: yarn.lock
-#    files are merged by yarn, and where both sides only added lines, both
-#    additions are kept.
+#    person are resolved by .github/fork/resolve-conflicts.mjs: a file only
+#    one side changed takes that side's version, package-lock.json files are
+#    settled by npm, and where both sides only added lines, both additions
+#    are kept.
 # 2. Check: the merged code must install, pass the lint and the type check,
 #    and pass the unit tests on the given runner. Git can cleanly merge code
 #    that no longer works together, when upstream changes a function Smart
@@ -94,7 +95,7 @@ jobs:
           git archive "$GITHUB_SHA" .github/fork | tar -x -C "$RUNNER_TEMP/fork"
           echo "FORK_SCRIPTS=$RUNNER_TEMP/fork/.github/fork" >> "$GITHUB_ENV"
 
-      # For the scripts, and for yarn when it merges lockfiles
+      # For the scripts, and for npm when it settles lockfiles
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
@@ -161,20 +162,20 @@ jobs:
         id: lint
         if: steps.install.outcome == 'success'
         continue-on-error: true
-        run: yarn lint
+        run: npm run lint
 
       - name: Type check
         id: typecheck
         if: steps.install.outcome == 'success'
         continue-on-error: true
-        run: yarn tsc -p tsconfig.json --noEmit
+        run: npx tsc -p tsconfig.json --noEmit
 
       - name: Unit tests
         id: tests
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: |
-          yarn test:setup
+          npm run test:setup
           # A flaky test shouldn't hold the sync back: they get a second chance
           bash "$FORK_SCRIPTS/unit-tests.sh" || {
             echo "::warning::Some unit tests failed: running them again in case they're flaky."

@@ -72,6 +72,6 @@ jobs:
     with:
       target-branch: development
       sources: desktop/desktop development
-      check-runner: macos-14
+      check-runner: macos-15
       retry: ${{ inputs.retry || false }}
     secrets: inherit
