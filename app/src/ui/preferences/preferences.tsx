@@ -67,7 +67,6 @@ import {
   setGitHookEnvShell,
   setHooksEnvEnabled,
 } from '../../lib/hooks/config'
-import { enableCopilotSdkCommitMessageGeneration } from '../../lib/feature-flag'
 import {
   DateFormat,
   TimeFormat,
@@ -80,10 +79,6 @@ import {
   setTimeFormatPreference,
   setNumberFormatPreference,
 } from '../../models/formatting-preferences'
-import {
-  enableCopilotAppHandoff,
-  enableFormattingPreferences,
-} from '../../lib/feature-flag'
 import { validateCopilotAppPath } from '../../lib/copilot-app'
 
 interface IPreferencesProps {
@@ -305,10 +300,8 @@ export class Preferences extends React.Component<
     ])
 
     // Kick off Copilot model list fetch (non-blocking)
-    if (this.isCopilotSdkEnabled) {
-      this.props.dispatcher.fetchCopilotModels()
-      this.props.dispatcher.fetchCopilotQuotaSnapshots()
-    }
+    this.props.dispatcher.fetchCopilotModels()
+    this.props.dispatcher.fetchCopilotQuotaSnapshots()
 
     const availableEditors = editors.map(e => e.editor) ?? null
     const availableShells = shells.map(e => e.shell) ?? null
@@ -394,7 +387,7 @@ export class Preferences extends React.Component<
         <div className="preferences-container">
           <TabBar
             onTabClicked={this.onTabClicked}
-            selectedIndex={this.tabToVisualIndex(this.state.selectedIndex)}
+            selectedIndex={this.state.selectedIndex}
             type={TabBarType.Vertical}
           >
             <span id={this.getTabId(PreferencesTab.Accounts)}>
@@ -405,12 +398,10 @@ export class Preferences extends React.Component<
               <Octicon className="icon" symbol={octicons.person} />
               Integrations
             </span>
-            {this.isCopilotSdkEnabled && (
-              <span id={this.getTabId(PreferencesTab.Copilot)}>
-                <Octicon className="icon" symbol={octicons.copilot} />
-                Copilot
-              </span>
-            )}
+            <span id={this.getTabId(PreferencesTab.Copilot)}>
+              <Octicon className="icon" symbol={octicons.copilot} />
+              Copilot
+            </span>
             <span id={this.getTabId(PreferencesTab.Git)}>
               <Octicon className="icon" symbol={octicons.gitCommit} />
               Git
@@ -589,7 +580,7 @@ export class Preferences extends React.Component<
             }
             accounts={this.props.accounts}
             byokProviders={this.props.byokProviders}
-            showBYOKSettings={this.shouldShowBYOKSettings()}
+            showBYOKSettings={true}
             onSignIn={this.onCopilotSignIn}
             onOpenCopilotPlans={this.onOpenCopilotPlans}
             onOpenCopilotFeatureSettings={this.onOpenCopilotFeatureSettings}
@@ -973,10 +964,6 @@ export class Preferences extends React.Component<
     this.setState({ alwaysUseCopilotForConflictResolution: checked })
   }
 
-  private shouldShowBYOKSettings(): boolean {
-    return this.props.accounts.some(enableCopilotSdkCommitMessageGeneration)
-  }
-
   private onConfigureCustomProviders = () => {
     this.props.dispatcher.showPopup({
       type: PopupType.CopilotCustomProviders,
@@ -1020,7 +1007,6 @@ export class Preferences extends React.Component<
     const copilotAppPathChanged = copilotAppPath !== initialCopilotAppPath
 
     if (
-      enableCopilotAppHandoff() &&
       copilotAppPathChanged &&
       copilotAppPath.length > 0 &&
       !(await validateCopilotAppPath(copilotAppPath))
@@ -1128,7 +1114,7 @@ export class Preferences extends React.Component<
       dispatcher.setCustomShell(customShell)
     }
 
-    if (enableCopilotAppHandoff() && copilotAppPathChanged) {
+    if (copilotAppPathChanged) {
       await dispatcher.setCopilotAppPath(
         copilotAppPath.length === 0 ? null : copilotAppPath
       )
@@ -1196,46 +1182,26 @@ export class Preferences extends React.Component<
       this.state.alwaysUseCopilotForConflictResolution
     )
 
-    if (enableFormattingPreferences()) {
-      if (this.state.selectedDateFormat !== undefined) {
-        setDateFormatPreference(this.state.selectedDateFormat)
-      }
+    if (this.state.selectedDateFormat !== undefined) {
+      setDateFormatPreference(this.state.selectedDateFormat)
+    }
 
-      if (this.state.selectedTimeFormat !== undefined) {
-        setTimeFormatPreference(this.state.selectedTimeFormat)
-      }
+    if (this.state.selectedTimeFormat !== undefined) {
+      setTimeFormatPreference(this.state.selectedTimeFormat)
+    }
 
-      if (this.state.selectedNumberFormat !== undefined) {
-        setNumberFormatPreference(this.state.selectedNumberFormat)
-      }
+    if (this.state.selectedNumberFormat !== undefined) {
+      setNumberFormatPreference(this.state.selectedNumberFormat)
+    }
 
-      if (this.state.preferAbsoluteDates !== undefined) {
-        dispatcher.setPreferAbsoluteDates(this.state.preferAbsoluteDates)
-      }
+    if (this.state.preferAbsoluteDates !== undefined) {
+      dispatcher.setPreferAbsoluteDates(this.state.preferAbsoluteDates)
     }
 
     this.props.onDismissed()
   }
 
-  private onTabClicked = (visualIndex: number) => {
-    this.setState({ selectedIndex: this.visualIndexToTab(visualIndex) })
-  }
-
-  private get isCopilotSdkEnabled(): boolean {
-    return this.props.accounts.some(enableCopilotSdkCommitMessageGeneration)
-  }
-
-  private tabToVisualIndex(tab: PreferencesTab): number {
-    if (!this.isCopilotSdkEnabled && tab > PreferencesTab.Copilot) {
-      return tab - 1
-    }
-    return tab
-  }
-
-  private visualIndexToTab(index: number): PreferencesTab {
-    if (!this.isCopilotSdkEnabled && index >= PreferencesTab.Copilot) {
-      return index + 1
-    }
-    return index
+  private onTabClicked = (selectedIndex: number) => {
+    this.setState({ selectedIndex })
   }
 }

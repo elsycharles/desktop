@@ -35,7 +35,10 @@ import { Emoji } from '../../lib/emoji'
 import { FilterChangesList } from './filter-changes-list'
 import { HookProgress } from '../../lib/git'
 import { ICopilotAssistedCommitRequest } from '../../models/copilot-assisted-commit'
-import { isAssistedCommitRunBusy } from '../../models/assisted-commit-run'
+import {
+  isAssistedCommitRepositoryLocked,
+  isAssistedCommitRunBusy,
+} from '../../models/assisted-commit-run'
 import { isRepositoryAffectedByAssistedCommit } from '../../lib/git/repository-operation'
 
 /**
@@ -65,7 +68,8 @@ interface IChangesSidebarProps {
   readonly isGeneratingCommitMessage: boolean
   readonly shouldShowGenerateCommitMessageCallOut: boolean
   readonly commitToAmend: Commit | null
-  readonly commitSuggestions: ReadonlyArray<ICommitSuggestion> | null
+  /** Smart Split's suggestions; none when left out */
+  readonly commitSuggestions?: ReadonlyArray<ICommitSuggestion> | null
   readonly isPushPullFetchInProgress: boolean
   // Used in receiveProps, no-unused-prop-types doesn't know that
   // eslint-disable-next-line react/no-unused-prop-types
@@ -249,12 +253,23 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
     )
   }
 
+  private get isSelectionDisabled(): boolean {
+    return (
+      this.props.isCommitting ||
+      isRepositoryAffectedByAssistedCommit(this.props.repository.path) ||
+      isAssistedCommitRepositoryLocked(this.props.changes.assistedCommit)
+    )
+  }
+
   private onIncludeChanged = (
     file:
       | WorkingDirectoryFileChange
       | ReadonlyArray<WorkingDirectoryFileChange>,
     include: boolean
   ) => {
+    if (this.isSelectionDisabled) {
+      return
+    }
     this.props.dispatcher.changeFileIncluded(
       this.props.repository,
       file,
@@ -334,8 +349,12 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
    */
   private onToggleInclude(row: number) {
     // Block toggling file inclusion while Smart Split suggestions are active
-    const { commitSuggestions } = this.props
+    const commitSuggestions = this.props.commitSuggestions ?? null
     if (commitSuggestions !== null && commitSuggestions.length > 0) {
+      return
+    }
+
+    if (this.isSelectionDisabled) {
       return
     }
 
@@ -523,7 +542,7 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
             this.props.shouldShowGenerateCommitMessageCallOut
           }
           commitToAmend={this.props.commitToAmend}
-          commitSuggestions={this.props.commitSuggestions}
+          commitSuggestions={this.props.commitSuggestions ?? null}
           showCoAuthoredBy={showCoAuthoredBy}
           coAuthors={coAuthors}
           externalEditorLabel={this.props.externalEditorLabel}

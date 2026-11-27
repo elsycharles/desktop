@@ -22,13 +22,6 @@ import {
   updateEndpointVersion,
 } from './endpoint-capabilities'
 import {
-  buildSmartSplitSystemPrompt,
-  buildSmartSplitUserPrompt,
-  ICommitFormatConfig,
-} from './smart-commit-prompt'
-import { parseSmartCommitSuggestions } from './smart-commit-suggestions'
-import { SmartCommitSuggestion } from '../models/commit-suggestion'
-import {
   clearCertificateErrorSuppressionFor,
   suppressCertificateErrorFor,
 } from './suppress-certificate-error'
@@ -2038,121 +2031,6 @@ export class API {
   }
 
   /**
-   * Make an authenticated request to the Copilot chat completions endpoint
-   * with a system prompt and user message. Used for smart commit splitting
-   * where we need custom instructions that the agent endpoint doesn't support.
-   */
-  private async copilotChatRequest(
-    systemMessage: string,
-    userMessage: string
-  ): Promise<CopilotChatCompletionResponse> {
-    if (!this.copilotEndpoint) {
-      throw new Error('No Copilot endpoint available')
-    }
-
-    const response = await this.request(
-      this.copilotEndpoint,
-      'POST',
-      '/chat/completions',
-      {
-        body: {
-          messages: [
-            {
-              role: 'system',
-              content: systemMessage,
-            },
-            {
-              role: 'user',
-              content: userMessage,
-            },
-          ],
-          model: 'gpt-4o',
-          temperature: 0.1,
-          stream: false,
-          response_format: {
-            type: 'json_object',
-          },
-        },
-        customHeaders: {
-          'X-Initiator': 'user',
-          'X-Interaction-ID': crypto.randomUUID(),
-          'X-Interaction-Type': 'generateSmartCommitSplit',
-          'Copilot-Integration-Id': 'github-desktop',
-        },
-      }
-    )
-
-    if (response.status === HttpStatusCode.TooManyRequests) {
-      const retryAfter = response.headers.get('Retry-After')
-      if (retryAfter) {
-        throw new CopilotError(
-          `Rate limited, retry after ${retryAfter} seconds.`,
-          response.status
-        )
-      } else {
-        throw new CopilotError(
-          'Rate limited, try again in a few minutes.',
-          response.status
-        )
-      }
-    } else if (response.status === HttpStatusCode.PaymentRequired) {
-      const errorMsg =
-        (await response.text()) || 'You have reached your quota limit.'
-      throw new CopilotError(errorMsg, response.status)
-    } else if (response.status === HttpStatusCode.Unauthorized) {
-      throw new CopilotError(
-        'Unauthorized: error with authentication.',
-        response.status
-      )
-    } else if (response.status === HttpStatusCode.Forbidden) {
-      const body = await response.text()
-      if (body.includes('unauthorized: not licensed to use Copilot')) {
-        throw new CopilotError(
-          'Unauthorized: not licensed to use Copilot.',
-          response.status
-        )
-      } else if (
-        body.includes(
-          'unauthorized: not authorized to use this Copilot feature'
-        )
-      ) {
-        throw new CopilotError(
-          'Unauthorized: not authorized to use this Copilot feature.',
-          response.status
-        )
-      } else if (
-        body.includes('integration does not have GitHub chat enabled')
-      ) {
-        throw new CopilotError(
-          'Integration does not have GitHub chat enabled.',
-          response.status
-        )
-      } else {
-        throw new CopilotError('Unauthorized: unknown.', response.status)
-      }
-    } else if (response.status === 466) {
-      throw new CopilotError(
-        'Client issue: unsupported API version.',
-        response.status
-      )
-    } else if (response.status >= HttpStatusCode.BadRequest) {
-      const internalError = `Internal server error, code: ${
-        response.status
-      }, request ID: ${response.headers.get('X-Github-Request-Id')}.`
-      console.error(
-        `Copilot chat request failed with status ${response.status}: ${internalError}`
-      )
-      throw new CopilotError(
-        'Something went wrong. Please, try again later.',
-        response.status
-      )
-    }
-
-    const json = (await response.json()) as CopilotChatCompletionResponse
-    return json
-  }
-
-  /**
    * Leverages Copilot to generate the commit details (title and description)
    * for a given diff.
    *
@@ -2338,48 +2216,6 @@ export class API {
     } catch (e) {
       log.warn(`fetchUserCopilotInfo: failed with endpoint ${this.endpoint}`, e)
       return undefined
-    }
-  }
-
-  /**
-   * Leverages Copilot to analyze file diffs and suggest multiple
-   * semantically-grouped commits, each with a title, description, and
-   * list of associated file paths (and hunks, for files split across
-   * several commits).
-   *
-   * @param diff Diff of all the changes to split, in git format
-   * @param filePaths All file paths in the diff (used for validation)
-   * @param formatConfig The user's preferred commit format template
-   * @returns Array of commit suggestions generated by Copilot
-   */
-  public async getDiffSmartCommitSuggestions(
-    diff: string,
-    filePaths: ReadonlyArray<string>,
-    formatConfig?: ICommitFormatConfig
-  ): Promise<ReadonlyArray<SmartCommitSuggestion>> {
-    try {
-      const response = await this.copilotChatRequest(
-        buildSmartSplitSystemPrompt(filePaths, formatConfig),
-        buildSmartSplitUserPrompt(diff)
-      )
-
-      const choice = response.choices.at(0)
-      if (!choice) {
-        throw new Error('No choice found in response')
-      }
-
-      const message = choice.message.content
-      if (!message) {
-        throw new Error('No message found in response')
-      }
-
-      return parseSmartCommitSuggestions(message, filePaths)
-    } catch (e) {
-      log.warn(
-        `getDiffSmartCommitSuggestions: failed with endpoint ${this.endpoint}`,
-        e
-      )
-      throw e
     }
   }
 
