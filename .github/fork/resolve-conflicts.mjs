@@ -12,6 +12,11 @@
 //   changing or removing any line, keeps both additions: ours, then theirs.
 //   Typically two sets of imports, class members or tests added at the same
 //   spot.
+// - A conflict where one side only added lines before or after lines the
+//   other side changed keeps the change and the additions. Typically a
+//   dependency upgraded next to one this fork added.
+// - The other conflicts of Markdown files keep our text: documentation
+//   doesn't affect the app, and this fork's documentation is its own.
 //
 // Every other conflict is left as is for a person. The conflicts must be
 // written in the diff3 style (merge.conflictStyle=diff3), which shows the
@@ -197,6 +202,37 @@ function keepBothAdditions({ ours, theirs }) {
   return [...ours, ...theirs]
 }
 
+/**
+ * One side only added lines before or after the original ones, which the
+ * other side changed: keep that change, with the additions around it.
+ */
+function keepChangeAndAdditions({ ours, base, theirs }) {
+  for (const [added, changed] of [
+    [ours, theirs],
+    [theirs, ours],
+  ]) {
+    if (added.length <= base.length) {
+      continue
+    }
+    const extra = added.length - base.length
+    if (sameLines(added.slice(0, base.length), base)) {
+      return [...changed, ...added.slice(base.length)]
+    }
+    if (sameLines(added.slice(extra), base)) {
+      return [...added.slice(0, extra), ...changed]
+    }
+  }
+  return null
+}
+
+/** How to resolve a conflict, or null when a person has to. */
+function resolveConflict(conflict, markdown) {
+  if (conflict.base.length === 0) {
+    return keepBothAdditions(conflict)
+  }
+  return keepChangeAndAdditions(conflict) ?? (markdown ? conflict.ours : null)
+}
+
 /** Resolves a text file's conflicts, or returns why it can't. */
 function resolveText(path) {
   const content = readFileSync(path, 'utf8')
@@ -209,16 +245,21 @@ function resolveText(path) {
   if (conflicts.length === 0) {
     return { resolved: false, reason: 'no conflict markers' }
   }
-  const changed = conflicts.filter(({ conflict }) => conflict.base.length > 0)
-  if (changed.length > 0) {
+  const markdown = /\.(md|markdown)$/i.test(path)
+  const resolutions = conflicts.map(({ conflict }) =>
+    resolveConflict(conflict, markdown)
+  )
+  const unresolved = resolutions.filter(r => r === null).length
+  if (unresolved > 0) {
     return {
       resolved: false,
-      reason: `both sides changed the same lines (${changed.length} of ${conflicts.length} conflicts)`,
+      reason: `both sides changed the same lines (${unresolved} of ${conflicts.length} conflicts)`,
     }
   }
 
+  let next = 0
   const lines = parts.flatMap(part =>
-    part.conflict ? keepBothAdditions(part.conflict) : part.text
+    part.conflict ? resolutions[next++] : part.text
   )
   const result = lines.join('\n')
 
@@ -228,7 +269,7 @@ function resolveText(path) {
     } catch {
       return {
         resolved: false,
-        reason: 'keeping both additions breaks the JSON',
+        reason: 'combining both sides breaks the JSON',
       }
     }
   }
@@ -237,7 +278,7 @@ function resolveText(path) {
   git('add', '--', path)
   return {
     resolved: true,
-    how: `kept both sides' additions (${conflicts.length} ${
+    how: `combined both sides (${conflicts.length} ${
       conflicts.length === 1 ? 'conflict' : 'conflicts'
     })`,
   }

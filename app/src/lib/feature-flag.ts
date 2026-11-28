@@ -105,64 +105,20 @@ export function enableImagePreviewsForDDSFiles(): boolean {
   return enableBetaFeatures()
 }
 
-export const enableCustomIntegration = () => true
-
-export const enableResizingToolbarButtons = () => true
-
-export const enableCommitMessageGeneration = (account: Account) => {
-  // In dev mode, always enable to allow testing
-  if (__DEV__) {
-    return true
-  }
-
-  return (
-    (account.features ?? []).includes(
-      'desktop_copilot_generate_commit_message'
-    ) &&
-    // IMPORTANT: Do not remove this feature flag without replacing its usages
-    // with a check for the `isCopilotDesktopEnabled` property on the account.
-    account.isCopilotDesktopEnabled
-  )
-}
-
-export const enableCopilotSdkCommitMessageGeneration = (account: Account) => {
-  // Enabled for all users in beta and development channels, and for users with
-  // the feature flag enabled in production.
-  return (
-    enableBetaFeatures() ||
-    (account.features ?? []).includes(
-      'desktop_enable_copilot_sdk_commit_message_generation'
-    )
-  )
-}
-
 /**
  * Should we offer the Copilot-assisted commit mode, where Copilot splits the
  * selected changes into commits and writes their messages?
+ *
+ * Enabled in beta and development builds, or through preview features.
+ *
+ * IMPORTANT: do not enable it in prod without checking the account's eligibility
+ * via the remote feature flag `desktop_copilot_assisted_commits`
  */
-export const enableCopilotAssistedCommit = enableDevelopmentFeatures
-
-/** Should we enable Copilot-powered merge conflict resolution? */
-export const enableCopilotConflictResolution = () => true
+export const enableCopilotAssistedCommit = (account: Account) =>
+  enableBetaFeatures()
 
 export function enableAccessibleListToolTips(): boolean {
   return enableBetaFeatures()
 }
 
-export const enableHooksEnvironment = () => true
-
 export const enableHooksByDefault = enableBetaFeatures
-
-export const enableFormattingPreferences = () => true
-
-/** Should the app enable worktree support? */
-export const enableWorktreeSupport = () => true
-
-/** Should the app offer handoff to the GitHub Copilot app? */
-export const enableCopilotAppHandoff = () =>
-  (__DARWIN__ || __WIN32__) && enableBetaFeatures()
-
-/** Should stats be sent to the new telemetry endpoint? */
-export function enableNewStatsEndpoint(): boolean {
-  return true
-}
