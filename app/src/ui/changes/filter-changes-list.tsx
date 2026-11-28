@@ -39,9 +39,13 @@ import {
   CopySelectedRelativePathsLabel,
 } from '../lib/context-menu'
 import { CommitMessage } from './commit-message'
-import { SuggestedCommitList, loadSavedFormat } from './suggested-commit-list'
 import { ICommitSuggestion } from '../../models/commit-suggestion'
-import { ICommitFormatConfig } from '../../lib/smart-commit-prompt'
+import {
+  SmartSplitLockedSelectionTooltip,
+  SmartSplitPanel,
+  hasSmartSplitSuggestions,
+  startSmartSplit,
+} from './smart-split-panel'
 import { ChangedFile } from './changed-file'
 import { IAutocompletionProvider } from '../autocompletion'
 import { showContextualMenu } from '../../lib/menu-item'
@@ -174,7 +178,8 @@ interface IFilterChangesListProps {
   readonly isGeneratingCommitMessage: boolean
   readonly shouldShowGenerateCommitMessageCallOut: boolean
   readonly commitToAmend: Commit | null
-  readonly commitSuggestions: ReadonlyArray<ICommitSuggestion> | null
+  /** Smart Split's suggestions; none when left out */
+  readonly commitSuggestions?: ReadonlyArray<ICommitSuggestion> | null
   readonly currentBranchProtected: boolean
   readonly currentRepoRulesInfo: RepoRulesInfo
   readonly aheadBehind: IAheadBehind | null
@@ -277,19 +282,11 @@ interface IFilterChangesListProps {
   ) => void
 }
 
-const smartSplitHeightKey = 'smart-split-panel-height'
-const defaultSmartSplitHeight = 300
-const minSmartSplitHeight = 150
-const maxSmartSplitHeight = 600
-
 interface IFilterChangesListState {
   readonly filteredItems: Map<string, IChangesListItem>
   readonly selectedItems: ReadonlyArray<IChangesListItem>
   readonly focusedRow: string | null
   readonly groups: ReadonlyArray<IFilterListGroup<IChangesListItem>>
-
-  /** Height of the Smart Split panel when active, persisted to localStorage */
-  readonly smartSplitHeight: number
 }
 
 function getSelectedItemsFromProps(
@@ -389,25 +386,11 @@ export class FilterChangesList extends React.Component<
     }
   )
 
-  private resizeStartY: number | null = null
-  private resizeStartHeight: number | null = null
-
   public constructor(props: IFilterChangesListProps) {
     super(props)
 
     const listItems = this.createListItems(props.workingDirectory.files)
     const groups = [listItems]
-
-    const savedHeight = localStorage.getItem(smartSplitHeightKey)
-    const smartSplitHeight = savedHeight
-      ? Math.max(
-          minSmartSplitHeight,
-          Math.min(
-            maxSmartSplitHeight,
-            parseInt(savedHeight, 10) || defaultSmartSplitHeight
-          )
-        )
-      : defaultSmartSplitHeight
 
     this.state = {
       filteredItems: new Map<string, IChangesListItem>(
@@ -416,7 +399,6 @@ export class FilterChangesList extends React.Component<
       selectedItems: getSelectedItemsFromProps(props),
       focusedRow: null,
       groups,
-      smartSplitHeight,
     }
   }
 
@@ -435,50 +417,6 @@ export class FilterChangesList extends React.Component<
         groups: [this.createListItems(nextProps.workingDirectory.files)],
       })
     }
-  }
-
-  public componentWillUnmount() {
-    document.removeEventListener('mousemove', this.handleResizeDragMove)
-    document.removeEventListener('mouseup', this.handleResizeDragStop)
-  }
-
-  // ── Vertical resize handle for Smart Split panel ──
-
-  private handleResizeDragStart = (e: React.MouseEvent<HTMLButtonElement>) => {
-    this.resizeStartY = e.clientY
-    this.resizeStartHeight = this.state.smartSplitHeight
-    document.addEventListener('mousemove', this.handleResizeDragMove)
-    document.addEventListener('mouseup', this.handleResizeDragStop)
-    e.preventDefault()
-  }
-
-  private handleResizeDragMove = (e: MouseEvent) => {
-    if (this.resizeStartY === null || this.resizeStartHeight === null) {
-      return
-    }
-    // Dragging up increases panel height, dragging down decreases it
-    const deltaY = this.resizeStartY - e.clientY
-    const newHeight = Math.max(
-      minSmartSplitHeight,
-      Math.min(maxSmartSplitHeight, this.resizeStartHeight + deltaY)
-    )
-    this.setState({ smartSplitHeight: newHeight })
-    e.preventDefault()
-  }
-
-  private handleResizeDragStop = (e: MouseEvent) => {
-    document.removeEventListener('mousemove', this.handleResizeDragMove)
-    document.removeEventListener('mouseup', this.handleResizeDragStop)
-    localStorage.setItem(
-      smartSplitHeightKey,
-      String(this.state.smartSplitHeight)
-    )
-    e.preventDefault()
-  }
-
-  private handleResizeDoubleClick = () => {
-    this.setState({ smartSplitHeight: defaultSmartSplitHeight })
-    localStorage.removeItem(smartSplitHeightKey)
   }
 
   private createListItems(
@@ -521,12 +459,7 @@ export class FilterChangesList extends React.Component<
     changeListItem: IChangesListItem,
     matches: IMatches
   ): JSX.Element | null => {
-    const {
-      rebaseConflictState,
-      onIncludeChanged,
-      availableWidth,
-      commitSuggestions,
-    } = this.props
+    const { rebaseConflictState, onIncludeChanged, availableWidth } = this.props
 
     const file = changeListItem.change
     const selection = file.selection.getSelectionType()
@@ -556,17 +489,15 @@ export class FilterChangesList extends React.Component<
       ? file.status.kind !== AppFileStatusKind.Untracked
       : includeAll
 
-    const hasActiveSmartSplit =
-      commitSuggestions !== null && commitSuggestions.length > 0
-
+    const hasSmartSplit = hasSmartSplitSuggestions(this.props.commitSuggestions)
     const disableSelection =
       this.isSelectionDisabled ||
       rebaseConflictState !== null ||
       isUncommittableSubmodule ||
-      hasActiveSmartSplit
+      hasSmartSplit
 
-    const checkboxTooltip = hasActiveSmartSplit
-      ? 'File selection is locked while Smart Split suggestions are active. Dismiss the suggestions to change file selection.'
+    const checkboxTooltip = hasSmartSplit
+      ? SmartSplitLockedSelectionTooltip
       : isUncommittableSubmodule
       ? 'This submodule change cannot be added to a commit in this repository because it contains changes that have not been committed.'
       : isPartiallyCommittableSubmodule
@@ -1000,35 +931,10 @@ export class FilterChangesList extends React.Component<
     this.props.onChangesListScrolled(scrollTop)
   }
 
-  private renderResizableCommitForm = (): JSX.Element => {
-    const { commitSuggestions } = this.props
-    const hasSmartSplit =
-      commitSuggestions !== null && commitSuggestions.length > 0
-
-    if (!hasSmartSplit) {
-      return this.renderCommitMessageForm()
-    }
-
-    return (
-      <>
-        <button
-          // Prevent form submission with this button
-          type="button"
-          tabIndex={-1}
-          className="vertical-resize-handle"
-          aria-label="Resize Smart Split panel"
-          onMouseDown={this.handleResizeDragStart}
-          onDoubleClick={this.handleResizeDoubleClick}
-        />
-        <div
-          className="smart-split-resizable-container"
-          style={{ height: this.state.smartSplitHeight }}
-        >
-          {this.renderCommitMessageForm()}
-        </div>
-      </>
-    )
-  }
+  private onSmartSplitCommits = (
+    filesSelected: ReadonlyArray<WorkingDirectoryFileChange>
+  ) =>
+    startSmartSplit(this.props.dispatcher, this.props.repository, filesSelected)
 
   private renderCommitMessageForm = (): JSX.Element => {
     const {
@@ -1044,7 +950,6 @@ export class FilterChangesList extends React.Component<
       currentBranchProtected,
       currentRepoRulesInfo: currentRepoRulesInfo,
       shouldShowGenerateCommitMessageCallOut,
-      commitSuggestions,
     } = this.props
 
     if (rebaseConflictState !== null) {
@@ -1095,18 +1000,15 @@ export class FilterChangesList extends React.Component<
         this.props.fileListFilter
       )
 
-    // If we have commit suggestions from smart split, render the suggestions UI
-    if (commitSuggestions !== null && commitSuggestions.length > 0) {
+    if (hasSmartSplitSuggestions(this.props.commitSuggestions)) {
       return (
-        <SuggestedCommitList
-          suggestions={commitSuggestions}
+        <SmartSplitPanel
+          dispatcher={this.props.dispatcher}
+          repository={repository}
+          workingDirectory={workingDirectory}
+          suggestions={this.props.commitSuggestions}
           isCommitting={isCommitting === true}
           isLoading={isGeneratingCommitMessage === true}
-          onSuggestionsUpdated={this.onSuggestionsUpdated}
-          onCommitAll={this.onCommitAllSuggestions}
-          onRegenerate={this.onRegenerateSmartSplit}
-          onDismiss={this.onDismissSmartSplit}
-          repository={this.props.repository}
         />
       )
     }
@@ -1206,51 +1108,6 @@ export class FilterChangesList extends React.Component<
         onAssistedCommitErrorDetails={this.onAssistedCommitErrorDetails}
       />
     )
-  }
-
-  private onSmartSplitCommits = (
-    filesSelected: ReadonlyArray<WorkingDirectoryFileChange>
-  ): void => {
-    this.props.dispatcher.incrementMetric(
-      'generateCommitMessageButtonClickCount'
-    )
-    const saved = loadSavedFormat(this.props.repository)
-    const formatConfig = saved.template.trim().length > 0 ? saved : undefined
-    this.props.dispatcher.generateSmartCommitSuggestions(
-      this.props.repository,
-      filesSelected,
-      formatConfig
-    )
-  }
-
-  private onSuggestionsUpdated = (
-    suggestions: ReadonlyArray<ICommitSuggestion>
-  ): void => {
-    this.props.dispatcher.setCommitSuggestions(
-      this.props.repository,
-      suggestions
-    )
-  }
-
-  private onCommitAllSuggestions = (): void => {
-    this.props.dispatcher.executeSmartCommitSuggestions(this.props.repository)
-  }
-
-  private onRegenerateSmartSplit = (
-    formatConfig?: ICommitFormatConfig
-  ): void => {
-    const filesSelected = this.props.workingDirectory.files.filter(
-      f => f.selection.getSelectionType() !== DiffSelectionType.None
-    )
-    this.props.dispatcher.generateSmartCommitSuggestions(
-      this.props.repository,
-      filesSelected,
-      formatConfig
-    )
-  }
-
-  private onDismissSmartSplit = (): void => {
-    this.props.dispatcher.setCommitSuggestions(this.props.repository, null)
   }
 
   private onSuccessfulCommitCreated = () => {
@@ -1545,8 +1402,7 @@ export class FilterChangesList extends React.Component<
   }
 
   private renderCheckBoxRow = () => {
-    const { workingDirectory, rebaseConflictState, commitSuggestions } =
-      this.props
+    const { workingDirectory, rebaseConflictState } = this.props
     const { files } = workingDirectory
 
     const visibleFiles = this.state.filteredItems.size
@@ -1557,14 +1413,11 @@ export class FilterChangesList extends React.Component<
       this.state.filteredItems
     )
 
-    const hasActiveSmartSplit =
-      commitSuggestions !== null && commitSuggestions.length > 0
-
     const disableAllCheckbox =
       files.length === 0 ||
       this.isSelectionDisabled ||
       rebaseConflictState !== null ||
-      hasActiveSmartSplit
+      hasSmartSplitSuggestions(this.props.commitSuggestions)
 
     const checkAllLabel = `${
       visibleFiles !== files.length ? `${formatNumber(visibleFiles)} of ` : ''
@@ -1692,7 +1545,7 @@ export class FilterChangesList extends React.Component<
         </div>
         {this.renderStashedChanges()}
         {this.renderHiddenChangesWarning()}
-        {this.renderResizableCommitForm()}
+        {this.renderCommitMessageForm()}
       </>
     )
   }

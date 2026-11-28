@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { showSmartSplitMenu } from './smart-split-panel'
 import classNames from 'classnames'
 import {
   AutocompletingTextArea,
@@ -1367,39 +1368,16 @@ export class CommitMessage extends React.Component<
       return
     }
 
-    const { filesSelected, commitToAmend, onSmartSplitCommits } = this.props
-
-    // Smart Split creates new commits, so it can't be used while amending.
     if (
-      onSmartSplitCommits === undefined ||
-      commitToAmend !== null ||
-      filesSelected.length === 0
+      !showSmartSplitMenu(
+        this.props.filesSelected,
+        this.props.commitToAmend,
+        this.props.onSmartSplitCommits,
+        this.generateCommitMessage
+      )
     ) {
       this.generateCommitMessage()
-      return
     }
-
-    const smartSplitLabel =
-      filesSelected.length === 1
-        ? __DARWIN__
-          ? 'Smart Split'
-          : 'Smart split'
-        : __DARWIN__
-        ? `Smart Split (${filesSelected.length} Files)`
-        : `Smart split (${filesSelected.length} files)`
-
-    showContextualMenu([
-      {
-        label: __DARWIN__
-          ? 'Generate Commit Message'
-          : 'Generate commit message',
-        action: this.generateCommitMessage,
-      },
-      {
-        label: smartSplitLabel,
-        action: () => onSmartSplitCommits(filesSelected),
-      },
-    ])
   }
 
   private generateCommitMessage = () => {

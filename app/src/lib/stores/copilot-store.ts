@@ -74,14 +74,6 @@ import {
   CopilotConflictResolutionError,
   CopilotConflictResolutionFailureStage,
 } from '../copilot-conflict-resolution-error'
-import {
-  buildSmartSplitSystemPrompt,
-  buildSmartSplitUserPrompt,
-  generateSmartSplitDiffTag,
-  ICommitFormatConfig,
-} from '../smart-commit-prompt'
-import { parseSmartCommitSuggestions } from '../smart-commit-suggestions'
-import { SmartCommitSuggestion } from '../../models/commit-suggestion'
 
 /** The default model ID used for Copilot commit message generation. */
 export const DefaultCopilotModel = 'auto'
@@ -105,12 +97,6 @@ export {
   getEnforcedRuleDescriptions,
   ICommitMessagePromptTags,
 } from '../copilot-prompt'
-
-/**
- * Default timeout (in milliseconds) for Smart Split requests, which take
- * longer than generating a single commit message.
- */
-const SmartSplitRequestTimeoutMs = 120000
 
 /**
  * Provider configuration forwarded to the Copilot SDK when generating a
@@ -1151,123 +1137,6 @@ export class CopilotStore extends BaseStore {
       await session?.disconnect().catch(() => {})
 
       // Stop the client after use
-      if (client !== null) {
-        this.stopClient(client)
-      }
-    }
-  }
-
-  /**
-   * Splits the given diff into several commit suggestions using Copilot
-   * (Smart Split).
-   *
-   * @param diff The diff of the files to split, in git format
-   * @param filePaths All the file paths in the diff
-   * @param request Optional model selection (built-in or BYOK)
-   * @param formatConfig The user's commit message format, if any
-   * @throws CommitMessageGenerationCancelledError if `signal` is aborted
-   */
-  public async generateSmartCommitSuggestions(
-    account: Account,
-    diff: string,
-    filePaths: ReadonlyArray<string>,
-    repositoryPath: string,
-    request?: CopilotModelRequest | null,
-    formatConfig?: ICommitFormatConfig,
-    signal?: AbortSignal
-  ): Promise<ReadonlyArray<SmartCommitSuggestion>> {
-    const throwIfCancelled = () => {
-      if (signal?.aborted) {
-        throw new CommitMessageGenerationCancelledError()
-      }
-    }
-
-    throwIfCancelled()
-    const credentials = this.createCredentialContext(account)
-
-    // Splitting changes needs more reasoning than writing a single commit
-    // message, which is what the conflict resolution config provides.
-    const { modelId, reasoningEffort, provider, timeoutMs } =
-      this.resolveConflictModelConfig(account, request)
-
-    let client: CopilotClient | null = null
-    let session: Awaited<ReturnType<CopilotClient['createSession']>> | null =
-      null
-
-    try {
-      client = await awaitCancellableCopilotOperation(
-        () => this.createClient(account, repositoryPath, credentials),
-        {
-          signal,
-          cancellationError: () => new CommitMessageGenerationCancelledError(),
-          disposeLateValue: lateClient => this.stopClient(lateClient),
-        }
-      )
-      throwIfCancelled()
-
-      const diffTag = generateSmartSplitDiffTag()
-
-      session = await this.createCancellableSession(
-        client,
-        {
-          clientName: CopilotClientNames['commit-message-generation'],
-          model: modelId,
-          reasoningEffort,
-          provider,
-          systemMessage: {
-            // Append so that copilot-instructions.md is still honored.
-            mode: 'append',
-            content: buildSmartSplitSystemPrompt(
-              filePaths,
-              formatConfig,
-              diffTag
-            ),
-          },
-          coauthorEnabled: false,
-          availableTools: [],
-          enableSessionStore: false,
-          createSessionFsProvider: createCopilotInMemorySessionFsProvider,
-          onPermissionRequest: async () => ({
-            kind: 'reject',
-          }),
-        },
-        signal,
-        () => new CommitMessageGenerationCancelledError()
-      )
-
-      throwIfCancelled()
-
-      const response = await sendCopilotMessageRequest(
-        getCopilotMessageSession(session),
-        { prompt: buildSmartSplitUserPrompt(diff, diffTag) },
-        timeoutMs ?? SmartSplitRequestTimeoutMs,
-        {
-          signal,
-          cancellationError: () => new CommitMessageGenerationCancelledError(),
-        }
-      )
-
-      throwIfCancelled()
-
-      if (!response || !response.data.content) {
-        throw new Error('No response from Copilot')
-      }
-
-      return parseSmartCommitSuggestions(response.data.content, filePaths)
-    } catch (e) {
-      if (e instanceof CommitMessageGenerationCancelledError) {
-        throw e
-      }
-
-      if (signal?.aborted) {
-        throw new CommitMessageGenerationCancelledError()
-      }
-
-      log.warn('CopilotStore: Failed to generate Smart Split suggestions', e)
-      throw e
-    } finally {
-      await session?.disconnect().catch(() => {})
-
       if (client !== null) {
         this.stopClient(client)
       }

@@ -69,8 +69,6 @@ import { CloneRepositoryTab } from '../../models/clone-repository-tab'
 import { CloningRepository } from '../../models/cloning-repository'
 import { Commit, ICommitContext, CommitOneLine } from '../../models/commit'
 import { ICommitMessage } from '../../models/commit-message'
-import { ICommitSuggestion } from '../../models/commit-suggestion'
-import { ICommitFormatConfig } from '../../lib/smart-commit-prompt'
 import { CommitMode } from '../../models/commit-mode'
 import { ICopilotAssistedCommitRequest } from '../../models/copilot-assisted-commit'
 import { AssistedCommitRunOutcome } from '../../models/assisted-commit-run'
@@ -1296,32 +1294,6 @@ export class Dispatcher {
     filesSelected: ReadonlyArray<WorkingDirectoryFileChange>
   ) {
     return this.appStore._generateCommitMessage(repository, filesSelected)
-  }
-
-  /** Generate smart commit split suggestions using AI */
-  public generateSmartCommitSuggestions(
-    repository: Repository,
-    filesSelected: ReadonlyArray<WorkingDirectoryFileChange>,
-    formatConfig?: ICommitFormatConfig
-  ) {
-    return this.appStore._generateSmartCommitSuggestions(
-      repository,
-      filesSelected,
-      formatConfig
-    )
-  }
-
-  /** Update the commit suggestions for a repository */
-  public setCommitSuggestions(
-    repository: Repository,
-    suggestions: ReadonlyArray<ICommitSuggestion> | null
-  ) {
-    return this.appStore._setCommitSuggestions(repository, suggestions)
-  }
-
-  /** Commit all the enabled Smart Split suggestions of a repository, in order */
-  public executeSmartCommitSuggestions(repository: Repository) {
-    return this.appStore._executeSmartCommitSuggestions(repository)
   }
 
   public cancelGenerateCommitMessage(repository: Repository) {
