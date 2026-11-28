@@ -1,11 +1,19 @@
 name: Watch upstream releases
 
-# Starts a release of this fork when an upstream project publishes a new one:
+# Starts a release of this fork, for every platform, when desktop/desktop
+# publishes a new version (betas included), tagged v<version>-smartsplit. It
+# waits until the syncs have merged that version into development and
+# development-linux. When development-linux is still behind 12 hours after the
+# upstream release, macOS & Windows are released without waiting for it.
 #
-# - desktop/desktop (betas included) → macOS & Windows release, as soon as
-#   development contains it (the hourly sync merges it), tagged
-#   v<version>-smartsplit
-# - shiftkey/desktop → Linux release
+# A release that failed isn't started again before a day has passed, rather
+# than every hour.
+#
+# It also keeps the releases page tidy (see .github/fork/tidy-releases.mjs):
+# releases named after their version, betas as pre-releases, the most recent
+# stable version as the latest release. Starting this workflow with "Delete
+# duplicates" also deletes the releases that more recent releases of the same
+# version replace.
 #
 # GitHub doesn't notify forks about upstream releases, so this checks hourly.
 
@@ -13,6 +21,14 @@ on:
   schedule:
     - cron: '37 * * * *'
   workflow_dispatch:
+    inputs:
+      delete-duplicates:
+        description: >-
+          Also delete the releases (and their tags) that more recent releases of
+          the same version replace
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: watch-upstream-releases
@@ -23,7 +39,7 @@ jobs:
     name: Check for new upstream releases
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       actions: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -33,7 +49,7 @@ jobs:
           ref: development
           fetch-depth: 0
 
-      # A release takes about 30 minutes: don't start the same one again
+      # A release takes about an hour: don't start the same one again
       - name: Check that no release is running
         id: idle
         run: |
@@ -45,17 +61,18 @@ jobs:
           fi
           echo "idle=$([ "$running" = "0" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
-      - name: desktop/desktop → macOS & Windows
+      - name: Release desktop/desktop's latest version
         if: steps.idle.outputs.idle == 'true'
         run: |
           set -euo pipefail
-          upstream_tag=$(gh release list -R desktop/desktop --limit 1 \
-            --json tagName --jq '.[0].tagName')
+          read -r upstream_tag published < <(gh release list -R desktop/desktop \
+            --limit 1 --json tagName,publishedAt \
+            --jq '.[0] | "\(.tagName) \(.publishedAt)"')
           version="${upstream_tag#release-}"
           tag="v${version}-smartsplit"
-          echo "Latest desktop/desktop release: ${upstream_tag}"
+          echo "Latest desktop/desktop release: ${upstream_tag} (${published})"
 
-          # Already released (manual re-releases add a .N suffix)
+          # Already released (new releases of a version add a .N suffix)
           released=$(gh release list -R "$GITHUB_REPOSITORY" --limit 100 \
             --json tagName --jq '.[].tagName' |
             grep -E "^${tag//./\\.}(\\.[0-9]+)?$" || true)
@@ -64,35 +81,49 @@ jobs:
             exit 0
           fi
 
-          # Wait until the hourly sync has merged the release into development
+          # A release of it that failed is tried again a day later
+          failed=$(gh run list -R "$GITHUB_REPOSITORY" --workflow release.yml \
+            --limit 50 --json displayTitle,conclusion,createdAt \
+            --jq "[.[] | select(.displayTitle == \"Release ${tag}\" and
+              .conclusion == \"failure\" and
+              (.createdAt | fromdateiso8601) > (now - 86400))] | length")
+          if [ "$failed" != "0" ]; then
+            echo "::warning::The release of ${tag} failed less than a day ago, see the Release workflow's runs: it's started again a day after."
+            exit 0
+          fi
+
+          # Wait until the syncs have merged the release
           git fetch --no-tags https://github.com/desktop/desktop.git \
             "refs/tags/${upstream_tag}:refs/tags/upstream-${upstream_tag}"
+          git fetch --no-tags origin development-linux
           if ! git merge-base --is-ancestor "upstream-${upstream_tag}" HEAD; then
-            echo "development doesn't contain ${upstream_tag} yet, waiting for the sync."
+            echo "development doesn't have ${upstream_tag} yet, waiting for the sync."
             exit 0
           fi
 
-          echo "Starting the macOS & Windows release ${tag}"
+          platforms=all
+          if ! git merge-base --is-ancestor "upstream-${upstream_tag}" origin/development-linux; then
+            age=$(( $(date +%s) - $(date -d "$published" +%s) ))
+            if [ "$age" -lt 43200 ]; then
+              echo "development-linux doesn't have ${upstream_tag} yet, waiting for the sync."
+              exit 0
+            fi
+            platforms=macos-windows
+            echo "::warning::development-linux still doesn't have ${upstream_tag} 12 hours after its release: releasing macOS & Windows without Linux."
+          fi
+
+          echo "Starting the release ${tag} (${platforms})"
           gh workflow run release.yml -R "$GITHUB_REPOSITORY" --ref development \
-            -f tag="$tag" -f platforms=macos-windows \
+            -f tag="$tag" -f platforms="$platforms" \
             -f source="desktop/desktop ${upstream_tag}"
 
-      - name: shiftkey/desktop → Linux
+      - name: Tidy the releases page
         if: steps.idle.outputs.idle == 'true'
+        env:
+          DELETE_DUPLICATES: ${{ inputs.delete-duplicates || false }}
         run: |
-          set -euo pipefail
-          upstream_tag=$(gh release list -R shiftkey/desktop --limit 1 \
-            --json tagName --jq '.[0].tagName')
-          source="shiftkey/desktop ${upstream_tag}"
-          echo "Latest shiftkey/desktop release: ${upstream_tag}"
-
-          # Linux releases name the shiftkey release they're based on
-          if gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-            --jq '.[].body' | grep -qF "Based on ${source}."; then
-            echo "Already released."
-            exit 0
+          if [ "$DELETE_DUPLICATES" = "true" ]; then
+            node .github/fork/tidy-releases.mjs --delete-duplicates
+          else
+            node .github/fork/tidy-releases.mjs
           fi
-
-          echo "Starting the Linux release"
-          gh workflow run release.yml -R "$GITHUB_REPOSITORY" --ref development \
-            -f platforms=linux -f source="$source"
