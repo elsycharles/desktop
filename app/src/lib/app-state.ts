@@ -615,8 +615,8 @@ export interface IRepositoryState {
   /** Is generating a commit message? */
   readonly isGeneratingCommitMessage: boolean
 
-  /** Smart commit split suggestions from AI, or null if not active */
-  readonly commitSuggestions: ReadonlyArray<ICommitSuggestion> | null
+  /** Smart Split's suggestions; none when null or left out */
+  readonly commitSuggestions?: ReadonlyArray<ICommitSuggestion> | null
 
   /** Controller used to cancel an in-flight commit message generation. */
   readonly commitMessageGenerationAbortController: AbortController | null

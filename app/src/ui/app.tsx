@@ -202,7 +202,8 @@ import { AboutTestDialog } from './about/about-test-dialog'
 import { TestCLIActionDialog } from './cli-action/test-cli-action-dialog'
 import { TestCopilotSnapshotCardDialog } from './preferences/test-copilot-snapshot-card-dialog'
 import { TestTokenExpirationDialog } from './preferences/test-token-expiration-dialog'
-import { enableAutoUpdates } from '../lib/feature-flag'
+import { enableAutoUpdates } from '../lib/fork-release'
+import { startSmartSplitAfterDisclaimer } from './lib/smart-split'
 import {
   getCopilotAccountCacheKey,
   type CopilotFeature,
@@ -2912,16 +2913,10 @@ export class App extends React.Component<IAppProps, IAppState> {
         )
       }
       case PopupType.GenerateCommitMessageDisclaimer: {
-        const { repository, filesSelected, smartSplit } = popup
+        const { repository, filesSelected } = popup
         const onAccepted = () => {
           this.props.dispatcher.updateCommitMessageGenerationDisclaimerLastSeen()
-          if (smartSplit !== undefined) {
-            this.props.dispatcher.generateSmartCommitSuggestions(
-              repository,
-              filesSelected,
-              smartSplit.formatConfig
-            )
-          } else {
+          if (!startSmartSplitAfterDisclaimer(this.props.dispatcher, popup)) {
             this.props.dispatcher.generateCommitMessage(
               repository,
               filesSelected

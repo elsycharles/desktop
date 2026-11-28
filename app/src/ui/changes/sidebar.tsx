@@ -3,6 +3,7 @@ import * as React from 'react'
 
 import { DiffSelectionType } from '../../models/diff'
 import { ICommitSuggestion } from '../../models/commit-suggestion'
+import { hasSmartSplitSuggestions } from './smart-split-panel'
 import {
   IChangesState,
   RebaseConflictState,
@@ -348,9 +349,8 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
    * checkbox.
    */
   private onToggleInclude(row: number) {
-    // Block toggling file inclusion while Smart Split suggestions are active
-    const commitSuggestions = this.props.commitSuggestions ?? null
-    if (commitSuggestions !== null && commitSuggestions.length > 0) {
+    // The selection is locked while Smart Split suggestions are shown
+    if (hasSmartSplitSuggestions(this.props.commitSuggestions)) {
       return
     }
 
@@ -542,7 +542,7 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
             this.props.shouldShowGenerateCommitMessageCallOut
           }
           commitToAmend={this.props.commitToAmend}
-          commitSuggestions={this.props.commitSuggestions ?? null}
+          commitSuggestions={this.props.commitSuggestions}
           showCoAuthoredBy={showCoAuthoredBy}
           coAuthors={coAuthors}
           externalEditorLabel={this.props.externalEditorLabel}
