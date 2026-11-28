@@ -11,24 +11,20 @@ name: Watch upstream releases
 #
 # It also keeps the releases page tidy (see .github/fork/tidy-releases.mjs):
 # releases named after their version, betas as pre-releases, the most recent
-# stable version as the latest release. Starting this workflow with "Delete
-# duplicates" also deletes the releases that more recent releases of the same
-# version replace.
+# stable version as the latest release, and one release per version: the ones
+# that more recent releases of the same version replace are deleted.
 #
-# GitHub doesn't notify forks about upstream releases, so this checks hourly.
+# GitHub doesn't notify forks about upstream releases, so this checks hourly,
+# and after every push to development, which is how the syncs bring upstream's
+# releases in.
 
 on:
   schedule:
     - cron: '37 * * * *'
+  push:
+    branches:
+      - development
   workflow_dispatch:
-    inputs:
-      delete-duplicates:
-        description: >-
-          Also delete the releases (and their tags) that more recent releases of
-          the same version replace
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: watch-upstream-releases
@@ -119,11 +115,4 @@ jobs:
 
       - name: Tidy the releases page
         if: steps.idle.outputs.idle == 'true'
-        env:
-          DELETE_DUPLICATES: ${{ inputs.delete-duplicates || false }}
-        run: |
-          if [ "$DELETE_DUPLICATES" = "true" ]; then
-            node .github/fork/tidy-releases.mjs --delete-duplicates
-          else
-            node .github/fork/tidy-releases.mjs
-          fi
+        run: node .github/fork/tidy-releases.mjs
