@@ -5,15 +5,16 @@
 // - every release is named after its version, with its platforms when it
 //   doesn't have them all: "GitHub Desktop with Smart Split 3.7.1 (Linux)";
 // - betas (3.7.1-beta1…) are pre-releases, stable versions aren't;
-// - the most recent stable version is the latest release.
+// - the most recent stable version is the latest release;
+// - a release whose every platform a more recent release of the same version
+//   has, like the earlier one of a version released again, is deleted with its
+//   tag: one release per version is left.
 //
 // It only changes what differs, so it can run every hour. With
-// --delete-duplicates, it also deletes, with their tags, the releases whose
-// every platform a more recent release of the same version has: that can't be
-// undone, so it's only done when asked. With --dry-run, it only says what it
-// would do.
+// --keep-duplicates, it only lists the releases it would delete; with
+// --dry-run, it only says what it would do.
 //
-// Usage: node tidy-releases.mjs [--dry-run] [--delete-duplicates]
+// Usage: node tidy-releases.mjs [--dry-run] [--keep-duplicates]
 // Needs gh, with GH_TOKEN allowed to write the repository's contents, and
 // GITHUB_REPOSITORY.
 
@@ -21,7 +22,7 @@ import { execFileSync } from 'node:child_process'
 
 const repository = process.env.GITHUB_REPOSITORY
 const dryRun = process.argv.includes('--dry-run')
-const deleteDuplicates = process.argv.includes('--delete-duplicates')
+const deleteDuplicates = !process.argv.includes('--keep-duplicates')
 
 if (!repository) {
   throw new Error("GITHUB_REPOSITORY isn't set")
@@ -35,6 +36,15 @@ function act(description, ...args) {
   console.log(`${dryRun ? 'Would ' : ''}${description}`)
   if (!dryRun) {
     gh(...args)
+  }
+}
+
+/** Like act, but only warns when it fails. */
+function tryAct(description, ...args) {
+  try {
+    act(description, ...args)
+  } catch (e) {
+    console.log(`::warning::Couldn't ${description}: ${e.stderr ?? e}`)
   }
 }
 
@@ -104,7 +114,8 @@ function main() {
           'DELETE',
           `repos/${repository}/releases/${release.id}`
         )
-        act(
+        // The release is what matters: a tag left behind is only noise
+        tryAct(
           `delete the tag ${release.tag_name}`,
           'api',
           '-X',
@@ -114,7 +125,7 @@ function main() {
         continue
       }
       console.log(
-        `${release.tag_name} is replaced by more recent releases of ${release.version} (run with --delete-duplicates to delete it)`
+        `${release.tag_name} is replaced by more recent releases of ${release.version} (run without --keep-duplicates to delete it)`
       )
     }
 
